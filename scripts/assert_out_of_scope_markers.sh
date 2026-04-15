@@ -5,7 +5,7 @@ TARGET="${1:-$HOME/.claude/skills/active-research/SKILL.md}"
 BODY=$(awk '/^## API-First Sources/{flag=1; next} /^## /{flag=0} flag' "$TARGET")
 
 MISSING=()
-for kw in Tavily Exa Brave "Hacker News"; do
+for kw in Tavily Exa Brave Reddit; do
     if ! echo "$BODY" | grep -q "$kw"; then
         MISSING+=("$kw")
     fi
