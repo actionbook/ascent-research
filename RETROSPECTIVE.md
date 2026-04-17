@@ -244,14 +244,18 @@ Discovered during B4 validation: every research workflow to date is **fully seri
 - Multi-session (fresh browser instances) works today
 - Agent tool's `run_in_background: true` lets us dispatch N independent fetches as parallel subagents
 
-**What's needed (combined Tier 2 task, ~1 week):**
+**What's needed (combined Tier 2 task):**
 
-13. **Verify daemon concurrency is safe** — the L4 run indirectly confirmed that multi-URL `new-tab` + concurrent `wait network-idle` + concurrent `text --readable` works safely on one session (3 parallel tabs, 63 KB content, ~10 s). A formal smoke test remains a good idea, but the critical proof-point is in hand.
-14. **Add a "parallel sources" section to `active-research` SKILL.md** — recipe: "when discover returns ≥ 3 independent source URLs, open them all in one `new-tab` call with multiple `--tab` names, then dispatch `wait network-idle` + `text [--readable]` for each tab in shell `& ... wait`; synthesise only at the end."
-15. **Parallel `postagent` pattern** — document that independent API calls (HN Algolia + GitHub + arXiv) should run concurrently via shell `&`. L4 run measured 3 parallel API calls complete in < 2 s wall-clock.
-16. **Benchmark** — one real `/active-research` run before vs after, measure wall-clock and token cost. L4 run is a de-facto after-baseline (API layer < 2 s, browser layer ~10 s, synthesis + render < 5 s).
+13. **Verify daemon concurrency is safe** — ✅ L4 run indirectly confirmed multi-URL `new-tab` + concurrent `wait network-idle` + concurrent `text --readable` works safely on one session (3 parallel tabs, 63 KB content, ~10 s). Formal smoke test remains nice-to-have but not blocking.
+14. **Add a "parallel sources" section to `active-research` SKILL.md** — ✅ Landed 2026-04-18 as `### Parallel sources` subsection inside Navigation Pattern. Three patterns documented: parallel postagent, parallel browser tabs, mixed batch. All 8 `assert_*` scripts green.
+15. **Parallel `postagent` pattern** — ✅ Landed in the same SKILL.md change (Pattern 1). L4 measured 3 parallel API calls complete in < 2 s wall-clock.
+16. **Benchmark** — one real `/active-research` run before vs after, measure wall-clock and token cost. L4 run is a de-facto after-baseline (API layer < 2 s, browser layer ~10 s, synthesis + render < 5 s). A proper before/after benchmark still deserves a dedicated run post-landing.
 
-**Why Tier 2**: coordinates across 2 layers (skill prompt + user habit). Lower than the "session substrate" big-bang because it can ship incrementally. **Unblocked**: no longer depends on `browser fetch` — the pattern uses only existing original primitives.
+**Additional post-L4 SKILL.md change (not originally in Tier 2 list):**
+
+17. **Post-fetch content smell test** — ✅ Landed 2026-04-18 as `### Post-fetch content smell test — ALWAYS apply` subsection. Codifies the lesson from B4 removal: every `browser text` / `postagent send` must be followed by verification of URL match, non-trivial content length, no fallback warning on articles, and exit code 0. Bad results are dropped from the report rather than silently synthesised. This defends against the class of silent-failure bug that motivated removing fetch.
+
+**Why Tier 2 (status)**: skill-layer changes (items 14, 15, 17) are ✅ done. Tool-layer items (13 formal smoke, 16 proper benchmark) remain opportunistic.
 
 ### B4 removal (2026-04-17, post-L4)
 
