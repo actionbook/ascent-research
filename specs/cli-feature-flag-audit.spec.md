@@ -6,6 +6,33 @@ estimate: 0.5d
 depends: []
 ---
 
+## 实装时修订 (2026-04-18)
+
+原 spec 预判可以 gate 三个 feature:`stealth`+`camoufox`+`source`。实装期盘点发现:
+
+- **`stealth`**: 不是独立模块,是一个横贯 config / session / tab / browser 各层的
+  string 字段(62 处引用,多数是 `stealth_ua: Option<&str>` 透传)。干净 gate 需要先
+  把 stealth 相关代码隔离到一个 module,这超出本 task 的 0.5d 范围。
+- **`camoufox`**: `packages/cli/src/` 里只剩一行注释,实质代码不在本 crate。`Cargo.toml`
+  里也无 `thirtyfour`/`camoufox` 依赖。CLAUDE.md 的 camoufox 提示指的是历史/其它
+  crate 的状态,本 crate 不涉及。
+- **`source`**: 2026-04-18 新加的模块,自包含在 `src/commands/source/` + 一个 cli.rs
+  枚举变体——**可以干净 gate**。
+
+**修订后的实装范围**:
+- 建立 `[features]` 基础设施 + `default = ["source"]`
+- 给 `source` 模块加 `#[cfg(feature = "source")]` 守卫(路由 / 枚举 / run 分派)
+- 验证 `--no-default-features` 编译通过,`actionbook source route` 报 unrecognized subcommand
+- 记录 binary 体积基线(default vs --no-default-features)
+- `stealth` 和 `camoufox` 的 gate **推迟到独立 task**(分别命名为
+  `cli-stealth-module-isolation` 和 `cli-camoufox-gate`,本 task 不起它们的 spec,按需再开)
+- CI 矩阵更新**推迟到独立 commit**(本 task 避免一次碰太多动目)
+
+**保留的价值**: 即便只 gate 一个 feature,仍然解决了最迫切的问题——证明 `[features]`
+infrastructure 可以工作、为下一个新命令建立样板。后续命令可以参考本 task 的模式一个
+个加 gate,避免"所有新命令都默认 on"的漂移重演。
+---
+
 ## 意图
 
 `packages/cli/CLAUDE.md` 明确要求："Feature flags must gate compilation. The current
