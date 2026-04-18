@@ -39,13 +39,24 @@ depends: []
   research route <url> [--prefer browser] [--rules <path>]
   research help
   ```
+- **子命令 sketch 的 flag 表只列本 task 示意**,具体 flag(如 `--slug` / `--force` /
+  `--preset` / `--rules` / `--prefer`)由对应 task spec 各自定义。foundation 只负责
+  骨架 + 全局 flag(`--json` / `--verbose` / `--no-color`)。
+- `research help` == `research --help` 的别名,退出码 0,输出等价;实装可直接 delegate 给
+  clap 的自动生成 help,无自定义渲染。
 - **Active session 概念**:`~/.actionbook/research/.active` 是一个文件,内容为当前
   active session 的 slug。`research new` 写入,`research close`/`rm` 清空。大多数
   子命令 `<slug>` 可省略时即读 `.active`。
-- **`.active` 并发语义**:所有对 `.active` 的**读-改-写**流程必须走 **advisory flock**
-  (对 `~/.actionbook/research/.active.lock` 加 `LOCK_EX`,macOS / Linux `flock(2)`)。
-  纯读(`get_active()`)不加锁。这保证并发 `research new` / `research resume` 不会
-  互相覆盖;LLM 端仍然**应该**在并行场景显式传 `--slug` 以避免混淆(doc 原则,非强制)。
+- **Advisory flock 锁文件清单**(所有并发 / 读-改-写 场景必须用 `flock(2) LOCK_EX`):
+  | 锁定目标 | 锁文件路径 | 何时加锁 |
+  |---|---|---|
+  | `.active` 的读-改-写 | `~/.actionbook/research/.active.lock` | `research new`/`resume`/`close`/`rm` 改 active 时 |
+  | session.jsonl 的 append | `~/.actionbook/research/<slug>/session.jsonl.lock` | 任何追加事件到 jsonl 前 |
+  | session.md sources block 重写 | `~/.actionbook/research/<slug>/session.md.lock` | `research add` 的 sources marker 之间重写前 |
+  | raw/`<n>` 编号分配 | **共享** `session.jsonl.lock`(读已有 source_attempted 计数 + 写新行必须在同一 critical section) | 见上 |
+  纯读(`get_active()`、`list`、`status` 的只读 fetch)**不**加锁。`.active.lock` 在
+  `get_active()` 失败可恢复场景可容忍缺失。LLM 端仍然**应该**在并行场景显式传 `--slug`
+  以避免混淆(doc 原则,非强制)。
 - Session 目录布局(契约,这些常量由本 task 的 `session::layout` 模块导出):
   ```
   ~/.actionbook/research/<slug>/
@@ -91,6 +102,11 @@ depends: []
 
   `RejectReason` enum:`fetch_failed | wrong_url | empty_content | api_error | duplicate`。
   细化定义 / 字段用法见 `research-add-source.spec.md`。
+
+  **`session_resumed` 发射规则**:仅在 `research resume <slug>` 主动 resume 时追加,
+  以及**未来**可能的"切换 active session 到已存在 slug"场景。**`research new` 不发射
+  `session_resumed`**(即使同时设 active;消费者读到 `session_created` 已隐含"成为
+  current active"的含义)。避免 `new` 产生两个事件导致 audit 计数重复。
 - **`session.jsonl` 读取容错**(所有读取命令共享):
   - 每行独立 JSON,必须可解析为已知 `SessionEvent` 变体
   - 解析失败的行:**跳过 + 写 stderr warning**(`⚠ session.jsonl line N malformed, skipped`),

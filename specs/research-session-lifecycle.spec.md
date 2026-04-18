@@ -87,8 +87,9 @@ depends: [research-cli-foundation]
 - **`--slug` 与自动派生的冲突行为不同**(由 foundation spec `resolve_slug` 保证):
   显式 `--slug` 冲突 → `SLUG_EXISTS`;自动派生冲突 → 加时间戳后缀,不报错
 - **`.active` 的并发安全**:遵循 foundation spec 的 flock 规则,不再在此重复
-- `research` 命令中任何打开 / 恢复 session 的操作都会在 session.jsonl 追加
-  `session_resumed` 事件(`resume` 和 `new` 时的自动设 active 都算),保持 audit 完整
+- `session_resumed` 事件**仅**由 `research resume <slug>` 主动触发;`research new`
+  隐式设 active 时**不**发射(避免 audit 双计数)。详见 foundation spec 的
+  "`session_resumed` 发射规则"。
 
 ## 边界
 
