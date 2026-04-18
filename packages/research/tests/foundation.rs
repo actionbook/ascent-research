@@ -57,8 +57,6 @@ fn remaining_stubs_return_not_implemented_json() {
     // add / sources / synthesize remain stubs until their respective specs
     // implement them.
     let stubs: &[(&[&str], &str)] = &[
-        (&["add", "https://example.com", "--json"], "research add"),
-        (&["sources", "--json"], "research sources"),
         (&["synthesize", "--json"], "research synthesize"),
     ];
     for (args, expected_cmd) in stubs {

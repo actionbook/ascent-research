@@ -10,3 +10,4 @@ pub mod layout;
 pub mod log;
 pub mod md_template;
 pub mod slug;
+pub mod sources_block;

@@ -141,8 +141,12 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
-        Commands::Add { .. } => commands::add::run(),
-        Commands::Sources { .. } => commands::sources::run(),
+        Commands::Add { url, slug, timeout, readable, no_readable } => {
+            commands::add::run(&url, slug.as_deref(), timeout, readable, no_readable)
+        }
+        Commands::Sources { slug, rejected } => {
+            commands::sources::run(slug.as_deref(), rejected)
+        }
         Commands::Synthesize { .. } => commands::synthesize::run(),
         Commands::Close { slug } => commands::close::run(slug.as_deref()),
         Commands::Rm { slug, force } => commands::rm::run(&slug, force),
