@@ -50,9 +50,15 @@ json-ui 报告"的机械组装器。
     没研究结果,报告没意义)
   - `## Findings` 缺失或为空:warning 但继续,报告用 placeholder "(no findings recorded)"
   - `## Metrics` `## Conclusion`:可选,缺了就不渲染对应 Section
-- Markdown 解析:用 `pulldown-cmark`(已成熟 Rust crate,低依赖)
+- Markdown 解析:用任意 CommonMark-compatible 库(实装决定具体 crate)
 - HTML 渲染:调用已有的 `json-ui` CLI 子进程(和 report.json 路径 + -o report.html)
 - Render 失败:保留 report.json,HTML 渲染失败不算 CLI fatal,但 error code 是 `RENDER_FAILED`
+- **Timestamp 一律 RFC3339 UTC**(含 footer `timestamp` 字段)
+- **`--open` 失败策略**:
+  - 非 TTY 环境(`!stdin.is_terminal()` 或 env `CI=1` 或 env `SYNTHESIZE_NO_OPEN=1`)
+    → 忽略 `--open`,stderr 一行提示 "skipping open (non-interactive)"
+  - `open` / `xdg-open` 子进程启动失败 → stderr warning,不影响主进程 exit code
+- **tracing 日志一律到 stderr**(与 actionbook CLI 的 dual-channel 约定一致)
 - **Synthesize 写的事件**:
   - `synthesize_started` 起始
   - `synthesize_completed` 带 `{report_json_path, report_html_path, accepted_sources, rejected_sources, duration_ms}`
@@ -67,7 +73,7 @@ json-ui 报告"的机械组装器。
 - `research-api-adapter/packages/research/src/commands/synthesize.rs`
 - `research-api-adapter/packages/research/src/session/md_parser.rs`
 - `research-api-adapter/packages/research/src/report/builder.rs`(组装 json-ui 结构)
-- `research-api-adapter/packages/research/Cargo.toml`(加 `pulldown-cmark`)
+- `research-api-adapter/packages/research/Cargo.toml`(按需加依赖)
 - `research-api-adapter/packages/research/tests/synthesize.rs`
 
 ### 禁止做
@@ -132,16 +138,20 @@ json-ui 报告"的机械组装器。
   并且 description 里含 trust_score(或 badge 形式)
   并且 **不**包含 rejected 源
 
-场景: Methodology 统计正确
+场景: Methodology 统计结构化(非精确字符串)
   测试:
     包: research-api-adapter/packages/research
     过滤: synthesize_methodology_stats
   层级: integration
   假设 session 有 3 accepted(2 postagent + 1 browser)+ 2 rejected
   当 synthesize
-  那么 Callout content 含 "3 accepted (postagent: 2, browser: 1)"
-  并且 含 "2 rejected"
-  并且 含 preset 名
+  那么 Methodology Callout content 在解析后包含这些独立可断言的数字:
+    - 总 accepted = 3(任何文字化形式)
+    - postagent executor count = 2
+    - browser executor count = 1
+    - rejected count = 2
+    - 含 preset 名字符串
+  (注:断言不要求精确字符串匹配,允许实装决定具体措辞 / 顺序 / 标点)
 
 场景: Render 失败时保留 report.json
   测试:
@@ -164,14 +174,26 @@ json-ui 报告"的机械组装器。
   那么 report.json 的 Key Findings ContributionList 长度 = 2
   并且 report.html 时间戳比 report.json 新或同
 
-场景: `--open` 在 macOS 打开 HTML
+场景: `--open` 在 TTY 环境调起打开命令
   测试:
     包: research-api-adapter/packages/research
     过滤: synthesize_open_flag
   层级: unit
-  当 `research synthesize --open`(非 CI 环境)
+  当 `research synthesize --open`(mocked TTY)
   那么 调用 `open`(macOS)/ `xdg-open`(Linux)子进程
   并且 主进程退出不等 `open` 完成
+  并且 exit code 0 即使 `open` 子进程尚未完成
+
+场景: `--open` 在 non-TTY / CI 环境被跳过
+  测试:
+    包: research-api-adapter/packages/research
+    过滤: synthesize_open_skipped_in_ci
+  层级: unit
+  假设 `CI=1` 或 `SYNTHESIZE_NO_OPEN=1` env,或 stdin 非 TTY
+  当 `research synthesize --open`
+  那么 **不**尝试 spawn `open` / `xdg-open`
+  并且 stderr 含 "skipping open (non-interactive)"
+  并且 exit code 0
 
 ## 排除范围
 

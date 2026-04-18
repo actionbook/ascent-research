@@ -70,18 +70,30 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
   3. 无 `--preset` / `--rules` 时默认 `tech`
 - **内置 tech preset 必须和现有 `actionbook source route` 规则行为一致**(port 5 条规则:
   hn-item / hn-topstories / github-repo-readme / github-issue / arxiv-abs)
-- Preset 加载错误(找不到文件 / TOML 解析失败 / 必需字段缺失)返回 `PRESET_ERROR`
+- **Preset 加载错误**统一 error code `PRESET_ERROR`,但 `error.details.sub_code` 必须
+  区分:`FILE_NOT_FOUND` / `TOML_SYNTAX` / `SCHEMA_INVALID`(缺必需字段) /
+  `PLACEHOLDER_UNBOUND`(见下)。LLM 看 sub_code 自调试。
+- **Placeholder validation**(preset load 时,不到 route 才报):
+  对每条规则,`template` 中每个 `{foo}` 占位符必须满足至少一项:
+  - `foo` 出现在 `path_segments`(模板捕获)
+  - `foo` 出现在 `query_param` 的 key
+  - `foo` 是通用占位符 `{url}` / `{host}` / `{path}`
+  否则 preset 加载失败,sub_code = `PLACEHOLDER_UNBOUND`,error message 指出哪条规则哪个
+  占位符
+- **Query param 正则**:用 Rust `regex` crate 语法(PCRE 子集,无 back-references)。
+  模式**隐式锚定到完整 param value**(等价于在首尾加 `^`/`$`)。URL 有多个同名 param
+  时只看第一个出现的。大小写敏感(与 HTTP 标准一致)。
 - URL 解析失败(非 http(s))返回 `INVALID_ARGUMENT`,和现有 actionbook source route 对齐
 - **不**做规则的运行时热重载(CLI 每次启动重新读 TOML)
 - **不**做 preset 的远程下载 / auto-update
-- **不**嵌入 Python-style 正则(用 Rust `regex` crate 的 POSIX 子集)
+- **crate 选型不入契约**:选哪个 TOML / regex 库是实装者决定(只要满足上述语法子集)
 
 ## 边界
 
 ### 允许修改
 - `research-api-adapter/packages/research/src/commands/route.rs`(新)
 - `research-api-adapter/packages/research/src/route/rules.rs`(新,TOML 模型 + 匹配器)
-- `research-api-adapter/packages/research/Cargo.toml`(加 `toml`, `regex` 依赖)
+- `research-api-adapter/packages/research/Cargo.toml`(按需加依赖)
 - `research-api-adapter/presets/tech.toml`(新)
 - `research-api-adapter/packages/research/tests/route.rs`(E2E)
 
@@ -128,15 +140,21 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
   那么 `.data.executor` = "postagent"
   并且 内置 tech preset 不被加载
 
-场景: Preset 加载错误有清晰错误
+场景: Preset 加载错误有清晰 sub_code
   测试:
     包: research-api-adapter/packages/research
     过滤: route_preset_error_codes
   层级: unit
-  假设 TOML 文件缺少 `host` 或 `fallback` 段
-  当 加载
-  那么 退出码非 0,error code `PRESET_ERROR`
-  并且 error message 含失败文件路径 + 失败字段描述
+  假设 四类错误各构造一个 preset 文件:
+    - 路径不存在
+    - TOML 语法错误(一元多行)
+    - 缺 `fallback` 段
+    - 规则 `template` 含 `{foo}` 但无对应捕获
+  当 逐个加载
+  那么 全部退出码非 0,top-level error code 都是 `PRESET_ERROR`
+  并且 `error.details.sub_code` 分别是 `FILE_NOT_FOUND` / `TOML_SYNTAX` /
+    `SCHEMA_INVALID` / `PLACEHOLDER_UNBOUND`
+  并且 每个 error message 含失败文件路径 + 失败字段 / 占位符名
 
 场景: --prefer browser 绕过 API 规则
   测试:
@@ -155,8 +173,9 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
   假设 规则模板含 `{owner}` `{repo}` `{id}` 等占位
   当 URL 中的对应片段被捕获
   那么 输出的 `command_template` 里占位符被替换为实际值
-  并且 未捕获到的占位符(e.g. 规则写了 `{foo}` 但 URL 没给)作为 spec lint 级别错误,
-    加载 preset 时就报错(不等到运行)
+  并且 `{url}` / `{host}` / `{path}` 三个通用占位符也能在模板中使用并被替换
+  并且 占位符绑定检查在 preset 加载阶段就做(见 `route_preset_error_codes` 的
+    `PLACEHOLDER_UNBOUND` 场景),到匹配时不再重复检查
 
 场景: 无 preset 指定时默认 tech
   测试:

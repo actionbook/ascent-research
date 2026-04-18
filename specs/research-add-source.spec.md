@@ -22,51 +22,130 @@ accepted 源才会进入 synthesize 环节。
   - 无 `--slug` 读 `.active`
   - `--readable` 默认根据 URL 推断(包含 `/blog/`, `/post/`, `/rfd/`, 路径长度>=3 → readable;
     其它 → 不 readable)
+  - `--timeout` 默认 **30000 ms**(单个子进程调用);
+    env var `ACTIONBOOK_RESEARCH_ADD_TIMEOUT_MS` 覆盖
 - 流程(CLI 内部固定,无 flag 绕过):
   1. Load session(读 session.toml 的 `preset`)
-  2. Route(调内部 route 模块,或直接 `research route` 的 library 版本)
-  3. Log `source_attempted` 事件到 jsonl(含 URL + 路由结果)
-  4. Subprocess:
-     - `executor == "postagent"` → spawn `postagent send --anonymous <api_url>`
-     - `executor == "browser"` → spawn `actionbook browser new-tab + wait-idle + text`
-       序列(3 个子进程调用,每步 JSON 模式,捕获输出)
-       **或**:暂时先只用 `actionbook browser new-tab + wait network-idle + text`(不
-       在 v1 MVP 中 parallel;后续优化)
-  5. Smell test(本 task 新增,见下)
-  6. 通过 → 写 raw/<n>-<kind>-<host>.json,jsonl 追加 `source_accepted`
-  7. 不通过 → jsonl 追加 `source_rejected`,不写 raw/,子进程原始输出**也**落盘到
-     `raw/<n>-<kind>-<host>.rejected.json`(便于人工调试,但不进 synthesize)
-- Smell test 规则(硬编码,不从 config 读):
-  - API 响应:HTTP status 2xx(通过 postagent 的 response envelope 字段)+ body 非空
-    (JSON 至少一个非空 array/object 键;atom 至少 1 个 `<entry>`)
-  - Browser 响应:`context.url` 匹配请求 URL(忽略 trailing slash / query 规范化),
-    不能是 `about:blank` 或 `chrome-error://`;`data.value` 长度 >= 500 字符(article)
-    或 >= 100 字符(其它)
-  - 阈值在常量里,future task 可配置
-- Rejected reasons(枚举,进入 jsonl):
-  - `fetch_failed`:子进程退出码非 0 或超时
-  - `wrong_url`:context.url 不匹配请求(about:blank 类)
-  - `empty_content`:长度低于阈值
-  - `api_error`:HTTP status 4xx/5xx
-  - `duplicate`:该 URL 已在本 session 的 raw/ 里(去重检查)
-- Source trust score(持久化到 jsonl,非 gate):
-  - API (executor=postagent) + smell passed: **+2**
-  - Article (browser + readable + len ≥ 2000): **+1.5**
-  - Browser page (smell passed,其它): **+1**
-  - Rejected: **不记分**(该条用 rejected status 标记)
-  score 写入 `source_accepted` 事件的 `trust_score` 字段
+  2. Route(调内部 route 模块 —— 和 `research route` 共享 library)
+  3. Log `source_attempted` 事件到 jsonl(含 URL + `route_decision`)
+  4. Subprocess(见下"子进程调用合约")
+  5. Smell test(见下"Smell test 规则")
+  6. 通过 → 写 `raw/<n>-<kind>-<host>.json`(subprocess JSON 原始输出),
+     jsonl 追加 `source_accepted` + `trust_score`
+  7. 不通过 → jsonl 追加 `source_rejected` + `reason`,subprocess 原始输出也
+     落盘到 `raw/<n>-<kind>-<host>.rejected.json`(debug 用,不进 synthesize)
+  8. 成功 / 失败路径都更新 `session.md` 的 sources block(仅 accepted 计入列表)
+
+### 子进程调用合约
+
+所有 IO 穿过子进程。实装必须满足:
+
+- **URL 永远以 argv 传递,绝不通过 shell 解释**(安全要求)。无 `sh -c "..."`、无
+  `format!` 拼接 shell 字符串。构造 `Command::new(bin).arg(url)` 即可
+- **子进程 stdout 容量上限 16 MiB**;超出视为 `fetch_failed`(避免内存炸)
+- **全局 timeout**(`--timeout <ms>` 默认 30 000)应用到单个子进程;
+  browser 的 3-步序列各步共享同一 budget(若 `new-tab` 已消耗 2s,`wait` 只剩 28s)
+- **Postagent 子进程**:
+  - 命令:`postagent send --anonymous --json <api_url>`
+  - 期望 stdout 一个合法 JSON 对象,包含(至少)`{status: int, body: string|object, headers: object}`
+  - `status` ≥ 400 → reason = `api_error`
+  - `status` ∈ [200,300) 但 `body` 为空 / `{}` / `[]` → reason = `empty_content`
+  - 子进程退出码 ≠ 0 或超时 → reason = `fetch_failed`(stderr 落到 rejected.json 的 `subprocess_stderr` 字段)
+- **Actionbook 浏览器子进程**(3 步序列,MVP 串行):
+  1. `actionbook browser new-tab <url> --session <session_id> --tab <tab_id> --json`
+  2. `actionbook browser wait network-idle --session <session_id> --tab <tab_id> --json --timeout <remaining_ms>`
+  3. `actionbook browser text [--readable] --session <session_id> --tab <tab_id> --json`
+  4. (cleanup) `actionbook browser close-tab --session <session_id> --tab <tab_id>`(best-effort,失败不报错)
+  - `<session_id>` / `<tab_id>` 由 `research` 自动分配,e.g. `research-<slug>` / `t-<N>`
+    (研究 session 启动时如无则 auto-start `actionbook browser start --session research-<slug>`)
+  - 每步期望 JSON envelope `{ok: bool, context: {url, title, ...}, data: ..., error: null | {code, message}}`
+  - smell test 从第 3 步的 `context.url` + `data.value` 读
+  - 任一步 `ok:false` → reason = `fetch_failed`
+- **二进制不在 PATH** → fatal `MISSING_DEPENDENCY`,error message 给出安装建议
+- **JSON 解析失败**(subprocess 输出不是合法 JSON) → reason = `fetch_failed`
+
+### Smell test 规则
+
+硬编码常量,env var 可覆盖以便 eval:
+
+| 场景 | 规则 | 默认常量 | env var |
+|---|---|---|---|
+| API body 必须非空 | JSON array 长度≥1 或 object 至少一键;atom 至少 1 个 `<entry>` | — | — |
+| Browser 文章长度下限 | `data.value.len() ≥ N` (readable 模式) | 500 | `ACTIONBOOK_RESEARCH_SMELL_ARTICLE_MIN_BYTES` |
+| Browser 短页长度下限 | `data.value.len() ≥ N` (非 readable) | 100 | `ACTIONBOOK_RESEARCH_SMELL_SHORT_MIN_BYTES` |
+| URL 匹配 | `context.url` 去 trailing `/` 、归一化大小写 host 后 == 请求 URL(同样归一化) | — | — |
+| Forbidden URL scheme | `about:` / `chrome-error:` / `data:` 一律 fail | — | — |
+
+拒绝原因枚举(引自 foundation spec `RejectReason`): `fetch_failed` / `wrong_url` /
+`empty_content` / `api_error` / `duplicate`。`duplicate` 由 `research add` 在调子进程**之前**
+用 URL 字符串归一化后查 session 历史 accepted 列表检测。
+
+### Response envelope(project.spec 明确要求的观察性合约)
+
+`research add --json` 返回:
+
+```json
+{
+  "ok": true,                       // 或 false 若 reject
+  "command": "research add",
+  "context": { "session": "<slug>", "url": "<requested url>" },
+  "data": {
+    "route_decision": { "executor": "postagent|browser", "kind": "...", "command_template": "..." },
+    "fetch_success": true,          // 子进程是否全部 exit 0
+    "smell_pass": true,             // smell test 是否通过
+    "bytes": 12345,                 // accepted 时是 raw/ 文件字节数;rejected 时是 observed body 长度(如有)
+    "warnings": ["..."],            // 来自子进程或 smell 阶段的非 fatal 提示
+    // accepted 时:
+    "raw_path": "raw/1-hn-item-news.ycombinator.com.json",
+    "trust_score": 2.0,
+    // rejected 时:
+    "reject_reason": "wrong_url",   // enum RejectReason
+    "observed_url": "about:blank",  // 仅 wrong_url 时
+    "rejected_raw_path": "raw/1-hn-item-news.ycombinator.com.rejected.json"
+  },
+  "error": null,                    // 或 {code: "SMELL_REJECTED", ...} 若 reject
+  "meta": { "duration_ms": 1234, "warnings": [...] }
+}
+```
+
+五个**独立可断言**字段:`route_decision` / `fetch_success` / `smell_pass` / `bytes` /
+`warnings`。LLM 能分别读出"路由对了吗"、"子进程活了吗"、"内容够吗"——这是
+observability-over-terseness 原则的具象表现。
+
+### Source trust score
+
+持久化到 `session.jsonl` 的 `source_accepted.trust_score`(不进入 response envelope
+直接字段因已拆到 data):
+
+- API (executor=postagent) + smell passed: **2.0**
+- Article (browser + readable + len ≥ 2000): **1.5**
+- Browser page (smell passed,其它): **1.0**
+
+advisory only,synthesize 读它用于 Sources Section 排序 / 加 badge,**CLI 不基于 score 丢源**。
+
+### `research sources` 子命令
+
 - `research sources [--slug <s>] [--rejected] [--json]`:
   - 默认只列 accepted
-  - `--rejected` 也列被拒绝的源
-  - JSON 模式返回完整结构(trust_score, url, kind, executor, path_on_disk, rejected_reason)
-- **不**在本 task 里做 parallel add(single-URL,single-session-at-a-time);后续 task
-  可做 `research add-batch <urls-file>`
-- **子进程错误**:subprocess panic / crash 视为 `fetch_failed`;如果子进程找不到
-  (which lookup fail)直接 fatal `MISSING_DEPENDENCY`
-- **进程级并发**:允许**多个 `research add` 并发跑**(不同 URL),但对同一 session 的
-  jsonl 写入必须走 file-lock(flock)避免行交织
-- **session.md 的 Sources 段**:用一个 markdown marker 标识起止,CLI 在两个 marker
-  之间 atomic 重写整段(从 jsonl 的 accepted 事件列表生成)
+  - `--rejected` 叠加列被拒绝
+  - JSON 模式:`.data.accepted` / `.data.rejected` 两个数组,结构和 jsonl 对应事件一致
+
+### 并发与幂等
+
+- **允许多个 `research add` 并发跑**(不同 URL,同 session)
+- **jsonl 写入必须 flock**(见 foundation 规范),保证行不交织
+- **raw/ 文件**:`<n>` 是从 session.jsonl 已有 `source_attempted` 事件数 +1(每次 add 开头
+  原子读+写的方式分配);同一 `<n>` 不会被两个并发 add 抢到——通过 jsonl flock 串行化获取
+- **Cleanup**:失败路径也清理 ephemeral browser tab(best-effort,失败不反馈到 CLI exit code)
+- **MVP 不做 parallel multi-URL add**;后续 `research add-batch` 独立 task
+- **子进程 panic/crash** → reason = `fetch_failed`
+
+### session.md Sources 段重写
+
+- 读 `SOURCES_START_MARKER` 和 `SOURCES_END_MARKER` 之间的内容(由 foundation spec 定义)
+- 用当前 accepted 事件列表生成替换文本(每源一行,含 URL + kind + trust_score)
+- **两个 marker 任一缺失**:fail 当前 `add` 调用,返回 `SESSION_MD_MARKER_MISSING` error code
+  (不默默追加,避免覆盖用户手写内容)
 
 ## 边界
 
@@ -89,18 +168,52 @@ accepted 源才会进入 synthesize 环节。
 
 ## 完成条件
 
-场景: API 路径 add 一个 HN 源到 accepted
+场景: API 路径 add 一个 HN 源到 accepted + 完整 response envelope
   测试:
     包: research-api-adapter/packages/research
-    过滤: add_hn_api_accepted
+    过滤: add_hn_api_accepted_envelope
   层级: integration(用真实 postagent 子进程 + mock HN response or 真实 HN)
   假设 session "s1" 已 new
-  当 `research add "https://news.ycombinator.com/item?id=42" --slug s1`
+  当 `research add "https://news.ycombinator.com/item?id=42" --slug s1 --json`
   那么 退出码 0
+  并且 响应 JSON 五个字段都存在且可独立断言:
+    - `data.route_decision.executor` == "postagent"
+    - `data.route_decision.kind` == "hn-item"
+    - `data.fetch_success` == true
+    - `data.smell_pass` == true
+    - `data.bytes` > 100(integer)
+    - `data.warnings` 是 array(可空)
+  并且 `data.trust_score` == 2.0
+  并且 `data.raw_path` == "raw/1-hn-item-news.ycombinator.com.json"
   并且 `~/.actionbook/research/s1/raw/1-hn-item-news.ycombinator.com.json` 存在且非空
   并且 session.jsonl 末尾两行分别是 `source_attempted` + `source_accepted`
-  并且 `source_accepted.trust_score` = 2
-  并且 session.md 的 `## Sources` 段含该 URL
+  并且 session.md 的 sources block(两个 marker 之间)含该 URL
+
+场景: wrong_url rejection envelope 携带 observed_url
+  测试:
+    包: research-api-adapter/packages/research
+    过滤: add_wrong_url_envelope
+  层级: integration
+  假设 mock browser 子进程返回 `context.url: "about:blank"`
+  当 `research add <requested-url> --json`
+  那么 退出码非 0
+  并且 `data.fetch_success` == true(子进程 exit 0)
+  并且 `data.smell_pass` == false
+  并且 `data.reject_reason` == "wrong_url"
+  并且 `data.observed_url` == "about:blank"
+  并且 `data.rejected_raw_path` 指向 `<n>-*.rejected.json`,文件存在
+  并且 `error.code` == "SMELL_REJECTED"
+
+场景: URL 以 argv 传递(命令注入防御)
+  测试:
+    包: research-api-adapter/packages/research
+    过滤: add_url_argv_safety
+  层级: unit
+  假设 URL 为 `https://news.ycombinator.com/item?id=1"; touch /tmp/pwned; echo "`
+  当 `research add <url>`
+  那么 文件 `/tmp/pwned` **不**被创建(URL 作为 argv 单元传递,不走 shell)
+  并且 subprocess 收到的 arg 和原 URL 字节相同
+  并且 不论 accept/reject,都不 crash
 
 场景: Browser 路径 add 一个博客到 accepted
   测试:

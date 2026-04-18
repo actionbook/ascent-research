@@ -34,12 +34,22 @@ depends: [research-cli-foundation]
         <preset name>
 
         [H2] Sources
-        <此列表由 `research add` 自动维护>
+        <!-- research:sources-start -->
+        _(由 `research add` 自动维护,请勿手工编辑此 HTML comment 之间的内容)_
+        <!-- research:sources-end -->
 
-        [H2] Progress / Notes
-        <由 LLM 编辑>
+        [H2] Overview
+        <此段必须在 synthesize 前由 LLM 填写,否则 synthesize 报 MISSING_OVERVIEW>
 
-  (实际写入文件时 `[H1]` 替换为 `#`,`[H2]` 替换为 `##`。)
+        [H2] Findings
+        <`### 标题` + body 形式,一条一 finding>
+
+        [H2] Notes
+        <Prose;自由格式>
+
+  实际写入文件时 `[H1]` 替换为 `#`,`[H2]` 替换为 `##`。marker 常量由
+  `research-cli-foundation` spec 的 `session::layout` 模块导出
+  (`SOURCES_START_MARKER` / `SOURCES_END_MARKER`)。
 - `session.toml`:
   ```toml
   slug = "..."
@@ -73,9 +83,12 @@ depends: [research-cli-foundation]
   - 连字符替换空白 / punctuation
   - 去掉非 `[a-z0-9-]` 字符
   - 截断到 60 字符
-  - 冲突时追加 `-YYYYMMDD-HHMM`
-- **`.active` 的并发安全**:写入用 `tempfile + rename`(atomic);不加进程锁
-  (单用户场景,race 概率可忽略)
+  - 冲突时追加 `-YYYYMMDD-HHMM`(见 foundation spec 的 `resolve_slug` 规则)
+- **`--slug` 与自动派生的冲突行为不同**(由 foundation spec `resolve_slug` 保证):
+  显式 `--slug` 冲突 → `SLUG_EXISTS`;自动派生冲突 → 加时间戳后缀,不报错
+- **`.active` 的并发安全**:遵循 foundation spec 的 flock 规则,不再在此重复
+- `research` 命令中任何打开 / 恢复 session 的操作都会在 session.jsonl 追加
+  `session_resumed` 事件(`resume` 和 `new` 时的自动设 active 都算),保持 audit 完整
 
 ## 边界
 
