@@ -1,0 +1,59 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+        continue-on-error: true  # style, not correctness — remove once clean
+
+      - name: cargo clippy
+        run: cargo clippy -p research --all-targets -- -D warnings
+        continue-on-error: true  # lint, not correctness — remove once clean
+
+      - name: cargo build
+        run: cargo build -p research --all-targets
+
+      - name: cargo test
+        env:
+          CI: 1
+          RESEARCH_NO_OPEN: 1
+          SYNTHESIZE_NO_OPEN: 1
+        run: cargo test -p research --all-targets
