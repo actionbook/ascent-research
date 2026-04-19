@@ -75,6 +75,12 @@ pub enum Commands {
         readable: bool,
         #[arg(long)]
         no_readable: bool,
+        /// Override smell-test min body bytes (browser path only).
+        #[arg(long = "min-bytes")]
+        min_bytes: Option<u64>,
+        /// Short-body behavior: "reject" (default) or "warn".
+        #[arg(long = "on-short-body")]
+        on_short_body: Option<String>,
     },
     /// List sources attached to the current or given session.
     Sources {
@@ -97,6 +103,12 @@ pub enum Commands {
         readable: bool,
         #[arg(long)]
         no_readable: bool,
+        /// Override smell-test min body bytes (browser path only).
+        #[arg(long = "min-bytes")]
+        min_bytes: Option<u64>,
+        /// Short-body behavior: "reject" (default) or "warn".
+        #[arg(long = "on-short-body")]
+        on_short_body: Option<String>,
     },
     /// Synthesize session.md + raw/ into report.json + report.html.
     Synthesize {
@@ -194,9 +206,23 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
-        Commands::Add { url, slug, timeout, readable, no_readable } => {
-            commands::add::run(&url, slug.as_deref(), timeout, readable, no_readable)
-        }
+        Commands::Add {
+            url,
+            slug,
+            timeout,
+            readable,
+            no_readable,
+            min_bytes,
+            on_short_body,
+        } => commands::add::run(
+            &url,
+            slug.as_deref(),
+            timeout,
+            readable,
+            no_readable,
+            min_bytes,
+            on_short_body.as_deref(),
+        ),
         Commands::Sources { slug, rejected } => {
             commands::sources::run(slug.as_deref(), rejected)
         }
@@ -207,6 +233,8 @@ fn dispatch(cmd: Commands) -> Envelope {
             timeout,
             readable,
             no_readable,
+            min_bytes,
+            on_short_body,
         } => commands::batch::run(
             &urls,
             slug.as_deref(),
@@ -214,6 +242,8 @@ fn dispatch(cmd: Commands) -> Envelope {
             timeout,
             readable,
             no_readable,
+            min_bytes,
+            on_short_body.as_deref(),
         ),
         Commands::Synthesize { slug, no_render, open } => {
             commands::synthesize::run(slug.as_deref(), no_render, open)
