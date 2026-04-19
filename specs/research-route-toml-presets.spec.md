@@ -195,3 +195,31 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
 - 规则的性能优化(预期 < 30 条规则,线性扫描足够)
 - 用户 GUI 管理 preset
 - `research route list-presets`(留给未来 inspection task)
+
+## Post-ship delta (2026-04-20)
+
+两条增量在这份 spec 定稿后落地,**没另开 spec**:
+
+### 1. 变长 path segment `{...name}` (commit f9014f8)
+
+原 spec 的 `path_segments` 只支持 `{capture}`(单段)。扩展允许以 `{...name}` 作
+**最后一段**,匹配"剩余所有段"并以 `/` 拼接。实装要点:
+
+- 新增 `SegmentPattern::VarCapture(String)` variant
+- 只允许在 `path_segments` 列表末尾,否则 `SCHEMA_INVALID`
+- `bound_placeholders` 把 VarCapture 的 name 纳入合法 template 占位符
+- Matching 语义:`segs.len() >= patterns.len() - 1`,末段消费 0+ 段
+
+### 2. GitHub 增量源码读取三规则(同 commit)
+
+`presets/tech.toml` 新加 3 条依赖上述 VarCapture:
+
+| kind | 源模式 | 重写到 |
+|------|-------|-------|
+| `github-file` | `github.com/{o}/{r}/blob/{ref}/{...path}` | `raw.githubusercontent.com/{o}/{r}/{ref}/{path}` |
+| `github-tree` | `github.com/{o}/{r}/tree/{ref}/{...path}` | `api.github.com/repos/{o}/{r}/contents/{path}?ref={ref}` |
+| `github-raw` | `raw.githubusercontent.com/{o}/{r}/{ref}/{...path}` | 透传 `{url}` |
+
+raw 域不计入 GitHub 匿名 60/hr rate limit — 这是设计重点。
+
+测试:单测 6 条在 `route/rules.rs`,集成 3 条在 `tests/route.rs`,共 9 绿。
