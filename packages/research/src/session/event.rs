@@ -152,6 +152,17 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+
+    /// v2: a `## Plan` block was authored by the agent (or overwritten).
+    /// The body itself lives in `session.md` — this event records *that*
+    /// and *when* a plan landed, plus its size for audit.
+    PlanWritten {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        body_chars: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

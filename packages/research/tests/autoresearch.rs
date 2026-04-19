@@ -49,6 +49,20 @@ impl Env {
     fn prep(&self, slug: &str, body: &str) {
         let (_, code, stderr) = self.research(&["new", "topic", "--slug", slug, "--json"]);
         assert_eq!(code, 0, "new failed: {stderr}");
+        // v2 enforces `## Plan` on iter 1. Tests focused on other behavior
+        // get a placeholder plan so the guard doesn't trip them. Tests that
+        // actually exercise plan enforcement call `prep_no_plan` instead.
+        let body_out = if body.contains("## Plan") {
+            body.to_string()
+        } else {
+            format!("{body}\n## Plan\nplaceholder plan for tests.\n")
+        };
+        fs::write(self.session_dir(slug).join("session.md"), body_out).unwrap();
+    }
+
+    fn prep_no_plan(&self, slug: &str, body: &str) {
+        let (_, code, stderr) = self.research(&["new", "topic", "--slug", slug, "--json"]);
+        assert_eq!(code, 0, "new failed: {stderr}");
         fs::write(self.session_dir(slug).join("session.md"), body).unwrap();
     }
 
@@ -355,7 +369,86 @@ fn loop_digest_source_writes_jsonl_event() {
     );
 }
 
-// ── Test 13: re-digesting the same URL is rejected (proves filter wiring) ─
+// v2 Step 4 — first-iter plan enforcement ────────────────────────────────
+
+// ── Test 13a: iter 1 without a plan rejects non-plan actions ────────────
+
+#[test]
+fn loop_first_iter_enforces_plan_when_absent() {
+    let env = Env::new();
+    env.prep_no_plan("p1", "## Overview\nbase content.\n");
+
+    // Fake returns a write_overview on iter 1 (not a plan). Expect reject.
+    let write = r_write_overview("oops forgot the plan");
+    let done = r_done("stop");
+    let (v, code, stderr) = env.loop_cmd("p1", &[write.as_str(), done.as_str()], &[]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(
+        v["data"]["actions_executed"], 0,
+        "iter 1 non-plan action must be rejected"
+    );
+    let warnings: Vec<String> = v["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        warnings.iter().any(|w| w.contains("plan_required")),
+        "expected plan_required warning; got: {warnings:?}"
+    );
+}
+
+// ── Test 13b: write_plan inserts `## Plan` and emits plan_written ───────
+
+#[test]
+fn loop_write_plan_inserts_section_and_writes_event() {
+    let env = Env::new();
+    env.prep_no_plan("p2", "## Overview\nbase.\n\n## 01 · A\nbody.\n");
+
+    let plan = r###"{"reasoning":"plan first","actions":[{"type":"write_plan","body":"step 1 fetch arxiv\nstep 2 fetch github"}],"done":false}"###;
+    let done = r_done("stop");
+    let (v, code, stderr) = env.loop_cmd("p2", &[plan, done.as_str()], &[]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 1);
+
+    let md = fs::read_to_string(env.session_dir("p2").join("session.md")).unwrap();
+    assert!(md.contains("## Plan"));
+    assert!(md.contains("step 1 fetch arxiv"));
+    // Must sit between Overview and the first numbered section.
+    let overview_idx = md.find("## Overview").unwrap();
+    let plan_idx = md.find("## Plan").unwrap();
+    let section_idx = md.find("## 01").unwrap();
+    assert!(
+        overview_idx < plan_idx && plan_idx < section_idx,
+        "plan must land between Overview and ## 01; md:\n{md}"
+    );
+
+    let jsonl = fs::read_to_string(env.session_dir("p2").join("session.jsonl")).unwrap();
+    assert!(
+        jsonl.contains(r#""event":"plan_written""#),
+        "expected plan_written event in jsonl"
+    );
+}
+
+// ── Test 13c: plan-then-other-action in same iter is allowed ────────────
+
+#[test]
+fn loop_plan_satisfied_allows_other_actions_same_iter() {
+    let env = Env::new();
+    env.prep_no_plan("p3", "## Overview\nbase.\n\n## 01 · A\nbody.\n");
+
+    let iter1 = r###"{"reasoning":"plan then write","actions":[{"type":"write_plan","body":"plan body"},{"type":"write_section","heading":"## 02 · WHY","body":"why body"}],"done":false}"###;
+    let done = r_done("stop");
+    let (v, code, _) = env.loop_cmd("p3", &[iter1, done.as_str()], &[]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        v["data"]["actions_executed"], 2,
+        "once plan lands mid-iter, subsequent actions this turn are allowed"
+    );
+}
+
+// ── Test 14: re-digesting the same URL is rejected (proves filter wiring) ─
 
 #[test]
 fn loop_subsequent_iter_sees_digested_sources_excluded() {

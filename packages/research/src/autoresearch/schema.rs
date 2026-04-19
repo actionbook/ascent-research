@@ -74,6 +74,12 @@ pub enum Action {
         /// for audit. Example: "## 02 · WHAT EVOLVES".
         into_section: String,
     },
+
+    /// v2: write (or replace) the `## Plan` section — the north-star the
+    /// agent re-reads every subsequent turn. On the first iteration of a
+    /// fresh session, this is the **only** action the loop accepts until
+    /// the plan exists. Body is free-form markdown.
+    WritePlan { body: String },
 }
 
 #[cfg(test)]
@@ -208,6 +214,23 @@ mod tests {
         let r: LoopResponse = serde_json::from_str(json).unwrap();
         assert!(r.actions.is_empty());
         assert!(!r.done);
+    }
+
+    #[test]
+    fn parses_write_plan() {
+        let json = r#"{
+            "reasoning":"draft the plan",
+            "actions":[{"type":"write_plan","body":"Goal: survey X. Steps: 1 fetch arxiv 2 fetch github 3 digest."}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::WritePlan { body } => {
+                assert!(body.contains("Goal"));
+                assert!(body.contains("arxiv"));
+            }
+            _ => panic!("expected WritePlan"),
+        }
     }
 
     #[test]

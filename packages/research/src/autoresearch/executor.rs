@@ -181,13 +181,30 @@ pub async fn run(
         let mut executed_this_round: u32 = 0;
         let mut rejected_this_round: u32 = 0;
 
+        // v2: first-iteration plan enforcement. On iter 1 with no `## Plan`
+        // in session.md yet, only `write_plan` is accepted. After a plan
+        // lands mid-iter, subsequent actions this turn are free.
+        let mut plan_required = iter == 1 && !session_has_plan(slug);
+
         for action in &response.actions {
             if actions_executed_total + executed_this_round >= cfg.max_actions {
                 termination = TerminationReason::MaxActionsExhausted;
                 break;
             }
+            if plan_required && !matches!(action, Action::WritePlan { .. }) {
+                warnings.push(format!(
+                    "action_rejected_iter_{iter}: plan_required — first iteration must emit a write_plan before any other action"
+                ));
+                rejected_this_round += 1;
+                continue;
+            }
             match dispatch_action(action, slug, iter, cfg.dry_run, research_bin) {
-                Ok(()) => executed_this_round += 1,
+                Ok(()) => {
+                    executed_this_round += 1;
+                    if matches!(action, Action::WritePlan { .. }) {
+                        plan_required = false;
+                    }
+                }
                 Err(reason) => {
                     warnings.push(format!(
                         "action_rejected_iter_{iter}: {reason}"
@@ -310,6 +327,7 @@ Valid action shapes (each is an object with a "type" field):
   { "type": "write_aside", "body": "short italic epigraph text" }
   { "type": "note_diagram_needed", "name": "axis.svg", "hint": "what the diagram should show" }
   { "type": "digest_source", "url": "https://...", "into_section": "## 02 · WHAT" }
+  { "type": "write_plan", "body": "Goal: …\nSources: arxiv+github+HN\nMilestones: iter 2 → fetch; iter 4 → draft" }
 
 Rules:
 - "batch" requires a JSON array of URL strings named "urls" (plural). Even
@@ -322,6 +340,12 @@ Rules:
   (rm, close, delete) are not available.
 
 Workflow: plan → fetch → digest + write → mark diagrams.
+- First-iteration contract: on a fresh session with no `## Plan` section
+  yet, the loop accepts ONLY a `write_plan` action. Any other action is
+  auto-rejected with `plan_required`. Keep the plan tight — one
+  paragraph covering goal, source mix (arxiv + github + HN/blog),
+  estimated iteration count, and 2-3 milestones. The plan is pinned to
+  the top of every subsequent user prompt as the north star.
 - The user prompt shows up to 3 `unread sources` (raw content truncated).
   Pick ONE per turn, write a section body that explains what the source
   says (with the URL as a markdown link), then emit a matching
@@ -349,6 +373,15 @@ alone produce a thin report.
 
 fn user_prompt(slug: &str, coverage: &Value, unread: &[UnreadSource]) -> String {
     let mut out = String::new();
+
+    // v2: pin the `## Plan` at the top so the agent re-reads the
+    // north-star every turn. Absent on first iteration only.
+    if let Some(plan) = read_plan_body(slug) {
+        out.push_str("# Plan (your north star — re-read this every turn)\n\n");
+        out.push_str(&plan);
+        out.push_str("\n\n---\n\n");
+    }
+
     out.push_str(&format!("session: {slug}\n\n"));
     out.push_str("coverage:\n");
     out.push_str(&serde_json::to_string_pretty(coverage).unwrap_or_default());
@@ -505,6 +538,7 @@ fn dispatch_action(
         Action::DigestSource { url, into_section } => {
             digest_source(slug, iteration, url, into_section)
         }
+        Action::WritePlan { body } => write_plan(slug, iteration, body),
     }
 }
 
@@ -594,6 +628,69 @@ fn write_section(slug: &str, heading: &str, body: &str) -> Result<(), String> {
     let md = std::fs::read_to_string(&path).map_err(|e| format!("read session.md: {e}"))?;
     let new_md = replace_or_insert_section(&md, heading, body);
     std::fs::write(&path, new_md).map_err(|e| format!("write session.md: {e}"))
+}
+
+/// v2: write (or replace) the `## Plan` block. If a plan already exists,
+/// its body is replaced. Otherwise the block is inserted after the
+/// `## Overview` body (before the first numbered section). Always emits
+/// a `PlanWritten` event.
+fn write_plan(slug: &str, iteration: u32, body: &str) -> Result<(), String> {
+    let path = layout::session_md(slug);
+    let md = std::fs::read_to_string(&path).map_err(|e| format!("read session.md: {e}"))?;
+
+    let new_md = if session_md_has_plan(&md) {
+        replace_or_insert_section(&md, "## Plan", body)
+    } else if let Some(overview_end) = find_overview_body_end(&md) {
+        let mut out = String::with_capacity(md.len() + body.len() + 16);
+        out.push_str(&md[..overview_end]);
+        if !md[..overview_end].ends_with("\n\n") {
+            out.push('\n');
+        }
+        out.push_str("## Plan\n");
+        out.push_str(body);
+        if !body.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+        out.push_str(&md[overview_end..]);
+        out
+    } else {
+        replace_or_insert_section(&md, "## Plan", body)
+    };
+    std::fs::write(&path, new_md).map_err(|e| format!("write session.md: {e}"))?;
+
+    log::append(
+        slug,
+        &SessionEvent::PlanWritten {
+            timestamp: Utc::now(),
+            iteration,
+            body_chars: body.chars().count() as u32,
+            note: None,
+        },
+    )
+    .map_err(|e| format!("append PlanWritten: {e}"))
+}
+
+fn session_has_plan(slug: &str) -> bool {
+    let md = std::fs::read_to_string(layout::session_md(slug)).unwrap_or_default();
+    session_md_has_plan(&md)
+}
+
+fn session_md_has_plan(md: &str) -> bool {
+    md.lines().any(|l| l.trim() == "## Plan")
+}
+
+fn read_plan_body(slug: &str) -> Option<String> {
+    let md = std::fs::read_to_string(layout::session_md(slug)).ok()?;
+    let marker = "## Plan\n";
+    let start = md.find(marker)?;
+    let body_start = start + marker.len();
+    let tail = &md[body_start..];
+    let end = tail
+        .find("\n## ")
+        .map(|i| body_start + i + 1)
+        .unwrap_or(md.len());
+    Some(md[body_start..end].trim_end().to_string())
 }
 
 /// Replace the body of `heading` (between this heading and the next `##`
