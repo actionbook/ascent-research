@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
-use crate::fetch::{self, browser, postagent, smell};
+use crate::fetch;
 use crate::output::Envelope;
 use crate::route::{self, Executor as RouteExecutor};
 use crate::session::{
@@ -128,10 +128,8 @@ pub fn run(
     }
 
     let fetch_start = std::time::Instant::now();
-    let (raw_bytes, outcome, executor_str) = match r.executor {
-        RouteExecutor::Postagent => run_postagent(&route_decision, timeout_ms),
-        RouteExecutor::Browser => run_browser(&slug, raw_n, url, readable, timeout_ms),
-    };
+    let (raw_bytes, outcome, executor_str) =
+        fetch::execute(&route_decision, &slug, raw_n, url, readable, timeout_ms);
     let duration_ms = fetch_start.elapsed().as_millis() as u64;
 
     let raw_dir = layout::session_raw_dir(&slug);
@@ -265,115 +263,6 @@ fn reason_str(r: RejectReason) -> &'static str {
     }
 }
 
-fn run_postagent(
-    decision: &RouteDecision,
-    timeout_ms: u64,
-) -> (Vec<u8>, fetch::FetchOutcome, String) {
-    let api_url = extract_api_url(&decision.command_template).unwrap_or_default();
-    match postagent::run(&api_url, timeout_ms) {
-        Ok(raw) => {
-            // postagent's exit code is 0 on 2xx AND network failures, but
-            // 1 on HTTP 4xx/5xx. The authoritative signal is parse()'s
-            // structural view of stdout/stderr, not the raw exit code.
-            let stderr_text = String::from_utf8_lossy(&raw.raw_stderr).into_owned();
-            let stderr_has_warning_marker =
-                stderr_text.contains('⚠') || stderr_text.contains("connection failed");
-            let outcome = match postagent::parse(&raw) {
-                Some(p) => {
-                    if p.status.is_none() {
-                        // network failure (DNS, connect refused)
-                        let first = stderr_text
-                            .lines()
-                            .next()
-                            .unwrap_or("postagent network failure")
-                            .to_string();
-                        fetch::FetchOutcome {
-                            accepted: false,
-                            observed_url: None,
-                            observed_bytes: 0,
-                            reject_reason: Some(RejectReason::FetchFailed),
-                            warnings: vec![first],
-                            bytes: 0,
-                        }
-                    } else if raw.exit_code != 0 && !stderr_has_warning_marker {
-                        // Non-zero exit with no recognized pattern → process
-                        // crashed / killed / wrote noise; treat as fetch fail.
-                        fetch::FetchOutcome {
-                            accepted: false,
-                            observed_url: None,
-                            observed_bytes: raw.raw_stdout.len() as u64,
-                            reject_reason: Some(RejectReason::FetchFailed),
-                            warnings: vec![format!(
-                                "postagent exit {} without expected pattern; stderr: {}",
-                                raw.exit_code,
-                                stderr_text.lines().next().unwrap_or("")
-                            )],
-                            bytes: raw.raw_stdout.len() as u64,
-                        }
-                    } else {
-                        smell::judge_api(&smell::ApiResponse {
-                            status: p.status,
-                            body_non_empty: p.body_non_empty,
-                            body_bytes: p.body_bytes,
-                        })
-                    }
-                }
-                None => fetch::FetchOutcome {
-                    accepted: false,
-                    observed_url: None,
-                    observed_bytes: raw.raw_stdout.len() as u64,
-                    reject_reason: Some(RejectReason::FetchFailed),
-                    warnings: vec![format!("postagent output unparseable (exit {})", raw.exit_code)],
-                    bytes: raw.raw_stdout.len() as u64,
-                },
-            };
-            (raw.raw_stdout, outcome, "postagent".into())
-        }
-        Err(msg) => {
-            let outcome = fetch::FetchOutcome {
-                accepted: false,
-                observed_url: None,
-                observed_bytes: 0,
-                reject_reason: Some(RejectReason::FetchFailed),
-                warnings: vec![msg],
-                bytes: 0,
-            };
-            (Vec::new(), outcome, "postagent".into())
-        }
-    }
-}
-
-fn run_browser(
-    slug: &str,
-    tab_n: u32,
-    url: &str,
-    readable: bool,
-    timeout_ms: u64,
-) -> (Vec<u8>, fetch::FetchOutcome, String) {
-    match browser::run(slug, tab_n, url, readable, timeout_ms) {
-        Ok(run) => {
-            let outcome = smell::judge_browser(&smell::BrowserResponse {
-                requested_url: url,
-                observed_url: &run.observed_url,
-                body_bytes: &run.body,
-                readable_mode: readable,
-            });
-            (run.raw.raw_stdout, outcome, "browser".into())
-        }
-        Err(msg) => {
-            let outcome = fetch::FetchOutcome {
-                accepted: false,
-                observed_url: None,
-                observed_bytes: 0,
-                reject_reason: Some(RejectReason::FetchFailed),
-                warnings: vec![msg],
-                bytes: 0,
-            };
-            (Vec::new(), outcome, "browser".into())
-        }
-    }
-}
-
 fn looks_like_article(url: &str) -> bool {
     let l = url.to_lowercase();
     ["/blog/", "/post/", "/rfd/", "/paper/", "/article/"]
@@ -407,13 +296,6 @@ fn rel_path(p: &Path) -> String {
     } else {
         p.to_string_lossy().into_owned()
     }
-}
-
-fn extract_api_url(template: &str) -> Option<String> {
-    let start = template.find('"')?;
-    let rest = &template[start + 1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 fn trust_score(exec: RouteExecutor, readable: bool, bytes: u64) -> f64 {

@@ -82,6 +82,22 @@ pub enum Commands {
         #[arg(long)]
         rejected: bool,
     },
+    /// Route + fetch + smell-test multiple URLs in parallel.
+    Batch {
+        /// One or more URLs to fetch concurrently.
+        urls: Vec<String>,
+        #[arg(long)]
+        slug: Option<String>,
+        /// Worker threads (1–16, default 4).
+        #[arg(long)]
+        concurrency: Option<usize>,
+        #[arg(long)]
+        timeout: Option<u64>,
+        #[arg(long)]
+        readable: bool,
+        #[arg(long)]
+        no_readable: bool,
+    },
     /// Synthesize session.md + raw/ into report.json + report.html.
     Synthesize {
         slug: Option<String>,
@@ -184,6 +200,21 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Sources { slug, rejected } => {
             commands::sources::run(slug.as_deref(), rejected)
         }
+        Commands::Batch {
+            urls,
+            slug,
+            concurrency,
+            timeout,
+            readable,
+            no_readable,
+        } => commands::batch::run(
+            &urls,
+            slug.as_deref(),
+            concurrency,
+            timeout,
+            readable,
+            no_readable,
+        ),
         Commands::Synthesize { slug, no_render, open } => {
             commands::synthesize::run(slug.as_deref(), no_render, open)
         }
