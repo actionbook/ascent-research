@@ -26,8 +26,27 @@ pub struct BrowserRun {
     pub body: Vec<u8>,
 }
 
+/// Session name to pass to `actionbook browser`. If the caller has exported
+/// `ACTIONBOOK_BROWSER_SESSION`, that value wins and the auto-start step is
+/// skipped — useful when the human already has an actionbook session that
+/// owns the Chrome profile (actionbook enforces one session per profile, so
+/// the CLI cannot create a fresh `research-<slug>` session in parallel).
 pub fn session_id_for(slug: &str) -> String {
-    format!("research-{slug}")
+    match std::env::var("ACTIONBOOK_BROWSER_SESSION") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => format!("research-{slug}"),
+    }
+}
+
+/// Whether the current run should attempt `browser start` at all. When the
+/// caller pins us to an existing session via env, skip auto-start — trying
+/// to start a session that already exists is harmless on some actionbook
+/// builds and a hard error on others.
+pub fn should_autostart_session() -> bool {
+    !matches!(
+        std::env::var("ACTIONBOOK_BROWSER_SESSION"),
+        Ok(s) if !s.trim().is_empty()
+    )
 }
 
 pub fn tab_id_for(n: u32) -> String {
@@ -47,32 +66,81 @@ pub fn run(
     let tab = tab_id_for(tab_n);
     let start = Instant::now();
 
-    // Make sure session exists (auto-start idempotent — if already up the
-    // subprocess returns non-zero which we treat as benign).
-    let _ = one_step(
-        &bin,
-        &["browser", "start", "--session", &session],
-        budget_remaining(start, timeout_ms)?,
-    );
-
-    // Step 1: new-tab
-    let r1 = one_step(
-        &bin,
-        &[
-            "browser", "new-tab", url, "--session", &session, "--tab", &tab, "--json",
-        ],
-        budget_remaining(start, timeout_ms)?,
-    )?;
-    if r1.exit_code != 0 {
-        return Err(format!(
-            "browser new-tab exit {}; stderr: {}",
-            r1.exit_code,
-            String::from_utf8_lossy(&r1.raw_stderr)
-        ));
+    // Make sure session exists. Only auto-start when we own the session name
+    // (research-<slug>); if the caller pinned us to an existing session via
+    // ACTIONBOOK_BROWSER_SESSION, skip — it already exists by contract.
+    if should_autostart_session() {
+        let start_res = one_step(
+            &bin,
+            &["browser", "start", "--session", &session],
+            budget_remaining(start, timeout_ms)?,
+        );
+        if let Ok(r) = start_res {
+            // Detect the profile-conflict error, parse out the holder session
+            // name, and return a structured hint. Actionbook writes this on
+            // **stdout** for plain-text mode — check both channels to be
+            // robust across versions.
+            if r.exit_code != 0 {
+                let both = format!(
+                    "{}\n{}",
+                    String::from_utf8_lossy(&r.raw_stdout),
+                    String::from_utf8_lossy(&r.raw_stderr),
+                );
+                if let Some(holder) = parse_profile_conflict(&both) {
+                    return Err(format!(
+                        "browser profile already owned by session '{holder}'; \
+                         retry with ACTIONBOOK_BROWSER_SESSION={holder} or close \
+                         that session first"
+                    ));
+                }
+                // Any other non-zero exit is treated as benign (session may
+                // already be running for an unrelated reason).
+            }
+        }
     }
 
-    // Step 2: wait network-idle
+    // Step 1: new-tab. When sharing an existing session we cannot predict
+    // which tab IDs are free, so let actionbook auto-assign and read the
+    // assigned ID out of the envelope. When the session is ours (auto-started
+    // above) we keep the deterministic `t-<n>` naming — it's helpful for
+    // debugging and matches the raw-file index.
+    let sharing = !should_autostart_session();
+    let new_tab_args: Vec<&str> = if sharing {
+        vec!["browser", "new-tab", url, "--session", &session, "--json"]
+    } else {
+        vec!["browser", "new-tab", url, "--session", &session, "--tab", &tab, "--json"]
+    };
+    let r1 = one_step(&bin, &new_tab_args, budget_remaining(start, timeout_ms)?)?;
+    if r1.exit_code != 0 {
+        // actionbook writes structured errors as a JSON envelope on stdout
+        // when `--json` is set; stderr is usually empty. Read both.
+        let stdout_txt = String::from_utf8_lossy(&r1.raw_stdout).into_owned();
+        let stderr_txt = String::from_utf8_lossy(&r1.raw_stderr).into_owned();
+        let err_msg = extract_json_error(&stdout_txt).unwrap_or_else(|| {
+            if !stderr_txt.trim().is_empty() {
+                stderr_txt.clone()
+            } else {
+                stdout_txt.clone()
+            }
+        });
+        return Err(format!("browser new-tab exit {}: {}", r1.exit_code, err_msg));
+    }
+
+    // If we auto-assigned, parse back the tab ID the daemon picked.
+    let tab = if sharing {
+        parse_assigned_tab(&r1.raw_stdout).unwrap_or_else(|| tab.clone())
+    } else {
+        tab
+    };
+
+    // Step 2: wait network-idle. Cap wait's portion of the budget so a
+    // never-idle page (common on Reddit / SPAs) doesn't starve the text
+    // step. 2/3 for wait, ≥ 4s reserved for text.
     let remaining = budget_remaining(start, timeout_ms)?;
+    let wait_budget = remaining
+        .saturating_sub(4_000)
+        .min(remaining * 2 / 3)
+        .max(1_000);
     let r2 = one_step(
         &bin,
         &[
@@ -84,30 +152,25 @@ pub fn run(
             "--tab",
             &tab,
             "--timeout",
-            &remaining.to_string(),
+            &wait_budget.to_string(),
             "--json",
         ],
-        remaining,
+        wait_budget,
     )?;
     // wait-idle timeout is tolerable (per B4 lesson) — don't hard-fail here
     if r2.exit_code != 0 {
         // fall through; text step will validate observed state
     }
 
-    // Step 3: text [--readable]
-    let mut args: Vec<String> = vec![
-        "browser".into(),
-        "text".into(),
-        "--session".into(),
-        session.clone(),
-        "--tab".into(),
-        tab.clone(),
-        "--json".into(),
+    // Step 3: text. `--readable` was removed from actionbook ≥ 1.1.0 — we
+    // keep the parameter in this function's signature (upstream callers may
+    // still want to signal the intent) but no longer forward it to the
+    // subprocess. Readability extraction is performed downstream on the
+    // raw text body if needed.
+    let _ = readable;
+    let arg_refs: Vec<&str> = vec![
+        "browser", "text", "--session", &session, "--tab", &tab, "--json",
     ];
-    if readable {
-        args.push("--readable".into());
-    }
-    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let r3 = one_step(&bin, &arg_refs, budget_remaining(start, timeout_ms)?)?;
     if r3.exit_code != 0 {
         return Err(format!(
@@ -225,4 +288,146 @@ fn one_step(bin: &str, args: &[&str], timeout_ms: u64) -> Result<RawFetch, Strin
         exit_code,
         duration_ms: start.elapsed().as_millis() as u64,
     })
+}
+
+/// Parse the actionbook stderr/stdout for a "profile already in use by session X"
+/// error and return X. Works against both plain-text and JSON-envelope output
+/// shapes that actionbook currently emits.
+fn parse_profile_conflict(text: &str) -> Option<String> {
+    // Matches: `profile 'NAME' is already in use by session 'OTHER'`
+    let re = regex::Regex::new(r"already in use by session '([^']+)'").ok()?;
+    re.captures(text).and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+}
+
+/// Parse the tab ID that actionbook auto-assigned from a `new-tab --json`
+/// envelope. Looks at `data.tab.tab_id`, falling back to `data.tab_id` if
+/// actionbook ever flattens the shape.
+fn parse_assigned_tab(stdout: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    v["data"]["tab"]["tab_id"]
+        .as_str()
+        .or_else(|| v["data"]["tab_id"].as_str())
+        .map(str::to_string)
+}
+
+/// Pull a human-readable error line out of an actionbook `--json` failure
+/// envelope. Falls back to the `code` field if `message` is absent.
+fn extract_json_error(stdout: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    let err = &v["error"];
+    let msg = err["message"].as_str();
+    let code = err["code"].as_str();
+    match (code, msg) {
+        (Some(c), Some(m)) => Some(format!("{c}: {m}")),
+        (Some(c), None) => Some(c.to_string()),
+        (None, Some(m)) => Some(m.to_string()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_env<F: FnOnce()>(key: &str, val: Option<&str>, f: F) {
+        let prev = std::env::var(key).ok();
+        match val {
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+        f();
+        match prev {
+            Some(p) => unsafe { std::env::set_var(key, p) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+    }
+
+    #[test]
+    fn session_id_defaults_to_slug_prefix() {
+        with_env("ACTIONBOOK_BROWSER_SESSION", None, || {
+            assert_eq!(session_id_for("my-slug"), "research-my-slug");
+        });
+    }
+
+    #[test]
+    fn session_id_env_override_wins() {
+        with_env("ACTIONBOOK_BROWSER_SESSION", Some("shared-session"), || {
+            assert_eq!(session_id_for("my-slug"), "shared-session");
+        });
+    }
+
+    #[test]
+    fn session_id_empty_env_falls_back_to_default() {
+        with_env("ACTIONBOOK_BROWSER_SESSION", Some("   "), || {
+            assert_eq!(session_id_for("x"), "research-x");
+        });
+    }
+
+    #[test]
+    fn autostart_gated_by_env() {
+        with_env("ACTIONBOOK_BROWSER_SESSION", None, || {
+            assert!(should_autostart_session());
+        });
+        with_env("ACTIONBOOK_BROWSER_SESSION", Some("existing"), || {
+            assert!(!should_autostart_session());
+        });
+        with_env("ACTIONBOOK_BROWSER_SESSION", Some(""), || {
+            assert!(should_autostart_session());
+        });
+    }
+
+    #[test]
+    fn parse_profile_conflict_plain() {
+        let s = "error SESSION_ALREADY_EXISTS: profile 'actionbook' is already in use by session 'research-t1'";
+        assert_eq!(parse_profile_conflict(s).as_deref(), Some("research-t1"));
+    }
+
+    #[test]
+    fn parse_profile_conflict_json_envelope() {
+        let s = r#"{"error":{"message":"profile 'actionbook' is already in use by session 'my-sess'"}}"#;
+        assert_eq!(parse_profile_conflict(s).as_deref(), Some("my-sess"));
+    }
+
+    #[test]
+    fn parse_profile_conflict_no_match() {
+        assert_eq!(parse_profile_conflict("nothing relevant"), None);
+    }
+
+    #[test]
+    fn parse_assigned_tab_from_nested_envelope() {
+        let s = br#"{"ok":true,"command":"browser new-tab","data":{"tab":{"tab_id":"t-17","title":"","url":"x"}}}"#;
+        assert_eq!(parse_assigned_tab(s).as_deref(), Some("t-17"));
+    }
+
+    #[test]
+    fn parse_assigned_tab_from_flat_envelope() {
+        let s = br#"{"ok":true,"data":{"tab_id":"t-99"}}"#;
+        assert_eq!(parse_assigned_tab(s).as_deref(), Some("t-99"));
+    }
+
+    #[test]
+    fn parse_assigned_tab_missing() {
+        assert_eq!(parse_assigned_tab(b"{}"), None);
+        assert_eq!(parse_assigned_tab(b"not json"), None);
+    }
+
+    #[test]
+    fn extract_json_error_tab_conflict() {
+        let s = r#"{"ok":false,"error":{"code":"TAB_ID_CONFLICT","message":"tab ID 't-1' already exists in this session"}}"#;
+        let msg = extract_json_error(s).unwrap();
+        assert!(msg.contains("TAB_ID_CONFLICT"));
+        assert!(msg.contains("already exists"));
+    }
+
+    #[test]
+    fn extract_json_error_falls_back_to_code_only() {
+        let s = r#"{"ok":false,"error":{"code":"SOMETHING"}}"#;
+        assert_eq!(extract_json_error(s).as_deref(), Some("SOMETHING"));
+    }
+
+    #[test]
+    fn extract_json_error_missing_returns_none() {
+        assert_eq!(extract_json_error("{}"), None);
+        assert_eq!(extract_json_error("not json"), None);
+    }
 }
