@@ -129,6 +129,16 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             "sources_hallucinated {sources_hallucinated} > 0"
         ));
     }
+    // Every user-accepted source must be digested and cited in the body.
+    // The agent has no authority to silently skip a URL the user curated —
+    // that call belongs to the human, not the loop. Leaving a source
+    // unused blocks report_ready so the agent must either digest it or
+    // the human must explicitly drop it before synthesis.
+    if sources_unused > 0 {
+        blockers.push(format!(
+            "sources_unused {sources_unused} > 0 — every accepted source must be digested and cited in the body"
+        ));
+    }
 
     let report_ready = blockers.is_empty();
 

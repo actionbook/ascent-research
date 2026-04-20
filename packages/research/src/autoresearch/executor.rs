@@ -378,6 +378,13 @@ Workflow: plan → fetch → digest + write → mark diagrams.
   says (with the URL as a markdown link), then emit a matching
   `digest_source` action so the next turn's prompt excludes it. Without
   a `digest_source`, the same source will keep reappearing.
+- EVERY accepted source MUST be digested. You do NOT have authority to
+  skip a URL the human added (e.g. by labeling it "low signal" or
+  "JS-only shell"). That judgment belongs to the human. If the raw
+  snippet looks thin, look harder: grep the raw file for titles, links,
+  headings, and github references before giving up. The loop enforces
+  this via a `sources_unused > 0` coverage blocker — you cannot reach
+  `report_ready` while any accepted source is missing from the body.
 - `into_section` must match the `heading` of a WriteSection you just
   wrote (or an existing section). Use this to link the source to its
   landing place in the narrative.
