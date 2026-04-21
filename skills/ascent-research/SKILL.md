@@ -1,18 +1,18 @@
 ---
 name: ascent-research
 description: Full ascent-research CLI — incremental, resumable research sessions driven from a Claude Code or Codex instance. Orchestrate postagent (HTTP API) + actionbook browser (CDP) + local file ingest to build reproducible sessions with a persistent wiki layer, autonomous LLM loop, and editorial HTML reports. Covers all command surfaces — online fetch (add / batch / route), local ingest (add-local), session lifecycle (new / list / status / resume / close / rm / series / fork via --from), autonomous loop, wiki knowledge layer (list / show / rm / query / lint), user-editable SCHEMA.md, and renderers (synthesize / report / coverage / diff). Use for any "build a reproducible report on topic X" or "investigate source tree Y" or "compare technologies A and B with citations" request.
-triggers: research, deep dive, deep-dive, investigate, analyze topic, survey, literature review, compare frameworks, review source, source tree, build knowledge base, library analysis, codebase analysis, ascent-research, research loop, session report
+triggers: research, deep dive, deep-dive, investigate, analyze topic, survey, literature review, compare frameworks, review source, source tree, build knowledge base, library analysis, codebase analysis, ascent-research, ascent-research loop, session report
 force_tool_turns: 15
 ---
 
-# research-rs — Full CLI Skill
+# ascent-research — Full CLI Skill
 
 Build reproducible, figure-rich research reports with a persistent per-session wiki. One CLI, three input modes (HTTP API / browser fallback / local file tree), three output surfaces (narrative report / entity wiki / event log), autonomous loop optional.
 
 ## Mental Model
 
 ```
-One research project = one session under ~/.actionbook/research/<slug>/
+One research project = one session under ~/.actionbook/ascent-research/<slug>/
 
   session.toml     metadata (topic, preset, tags, parent slug)
   SCHEMA.md        user-editable loop guidance
@@ -45,13 +45,13 @@ Everything downstream of the CLI is stateless between turns — the agent addres
 ### Session lifecycle
 
 ```
-research new <topic>     --slug <s> [--preset tech] [--tag t]... [--from <parent>] [--force]
-research list            [--tag t] [--tree]
-research show <slug>
-research status          [<slug>]
-research resume <slug>
-research close           [<slug>]
-research rm <slug>       [--force]
+ascent-research new <topic>     --slug <s> [--preset tech] [--tag t]... [--from <parent>] [--force]
+ascent-research list            [--tag t] [--tree]
+ascent-research show <slug>
+ascent-research status          [<slug>]
+ascent-research resume <slug>
+ascent-research close           [<slug>]
+ascent-research rm <slug>       [--force]
 ```
 
 - `new` seeds `SCHEMA.md` with a starter template and sets the session active.
@@ -62,11 +62,11 @@ research rm <slug>       [--force]
 ### Ingest — online
 
 ```
-research add <url>       [--slug <s>] [--timeout <ms>] [--readable | --no-readable]
+ascent-research add <url>       [--slug <s>] [--timeout <ms>] [--readable | --no-readable]
                           [--min-bytes N] [--on-short-body {reject|warn}]
-research batch <url>...  [--slug <s>] [--concurrency 1..16] [--timeout <ms>] [--readable | --no-readable]
-research sources         [<slug>] [--rejected]
-research route <url>     [--rules <file>] [--preset <name>] [--prefer browser]
+ascent-research batch <url>...  [--slug <s>] [--concurrency 1..16] [--timeout <ms>] [--readable | --no-readable]
+ascent-research sources         [<slug>] [--rejected]
+ascent-research route <url>     [--rules <file>] [--preset <name>] [--prefer browser]
 ```
 
 - `add` routes via preset (`tech.toml` default) — HN/arXiv/GitHub hit postagent directly, other hosts fall through to actionbook browser.
@@ -77,7 +77,7 @@ research route <url>     [--rules <file>] [--preset <name>] [--prefer browser]
 ### Ingest — local (v3)
 
 ```
-research add-local <path> [--slug <s>] [--glob '...']... [--max-file-bytes N] [--max-total-bytes N]
+ascent-research add-local <path> [--slug <s>] [--glob '...']... [--max-file-bytes N] [--max-total-bytes N]
 ```
 
 - `<path>` can be `file://abs/path`, `/abs/path`, `./rel/path`, `~/rel/path`, or a bare path.
@@ -89,7 +89,7 @@ research add-local <path> [--slug <s>] [--glob '...']... [--max-file-bytes N] [-
 ### Autonomous loop (feature: `autoresearch`)
 
 ```
-research loop [<slug>] --provider {fake|claude|codex} [--iterations N]
+ascent-research loop [<slug>] --provider {fake|claude|codex} [--iterations N]
               [--max-actions M] [--dry-run] [--fake-responses 'r1;r2;...']
 ```
 
@@ -104,8 +104,8 @@ research loop [<slug>] --provider {fake|claude|codex} [--iterations N]
 ### User-editable loop guidance (v3)
 
 ```
-research schema show   [--slug <s>]
-research schema edit   [--slug <s>]   # opens $EDITOR
+ascent-research schema show   [--slug <s>]
+ascent-research schema edit   [--slug <s>]   # opens $EDITOR
 ```
 
 - Starter template has five sections: Goal / Wiki conventions / What to emphasize / What to deprioritize / House style.
@@ -115,13 +115,13 @@ research schema edit   [--slug <s>]   # opens $EDITOR
 ### Wiki layer (v3)
 
 ```
-research wiki list                    [--slug <s>]
-research wiki show <page>             [--slug <s>]
-research wiki rm <page>               [--slug <s>] [--force]
-research wiki query "<question>"      [--slug <s>] [--save-as <slug>]
+ascent-research wiki list                    [--slug <s>]
+ascent-research wiki show <page>             [--slug <s>]
+ascent-research wiki rm <page>               [--slug <s>] [--force]
+ascent-research wiki query "<question>"      [--slug <s>] [--save-as <slug>]
                                        [--format prose|comparison|table]
                                        [--provider fake|claude|codex]
-research wiki lint                    [--slug <s>] [--stale-days N]
+ascent-research wiki lint                    [--slug <s>] [--stale-days N]
 ```
 
 - Page slug rules: `[a-z0-9_-]{1,64}`.
@@ -134,11 +134,11 @@ research wiki lint                    [--slug <s>] [--stale-days N]
 ### Output / QA
 
 ```
-research synthesize      [<slug>] [--no-render] [--open] [--bilingual]
-research report <slug>   --format rich-html|brief-md [--open | --no-open] [--stdout] [--output <path>]
-research series <tag>    [--open]
-research coverage        [<slug>]
-research diff            [<slug>] [--unused-only]
+ascent-research synthesize      [<slug>] [--no-render] [--open] [--bilingual]
+ascent-research report <slug>   --format rich-html|brief-md [--open | --no-open] [--stdout] [--output <path>]
+ascent-research series <tag>    [--open]
+ascent-research coverage        [<slug>]
+ascent-research diff            [<slug>] [--unused-only]
 ```
 
 - `synthesize` is the full path: renders `report.json` + inline-SVG + wiki TOC + sources list + optional bilingual (`--bilingual` calls Claude to inject `<p class="tr-zh">` siblings).
@@ -153,7 +153,7 @@ research diff            [<slug>] [--unused-only]
 --json            machine-readable envelope (ok/data/error/meta)
 -v / --verbose    stderr verbosity
 --no-color        disable ANSI
---help            clap-generated help; also `research help`
+--help            clap-generated help; also `ascent-research help`
 ```
 
 Envelope shape:
@@ -161,7 +161,7 @@ Envelope shape:
 ```json
 {
   "ok": true,
-  "command": "research add",
+  "command": "ascent-research add",
   "context": {"session": "tokio-v3", "url": "..."},
   "data":  {"...": "..."},
   "error": null,
@@ -176,7 +176,7 @@ On failure, `error.code` is machine-readable — never parse `error.message` for
 ### A. Survey a technology topic from public sources
 
 ```bash
-RBIN=~/.cargo/bin/research  # or target/release/research
+RBIN=~/.cargo/bin/ascent-research  # or target/release/ascent-research
 
 $RBIN new "state-space models vs attention 2026" --slug ssm-vs-attn --preset tech
 $RBIN batch \
@@ -319,8 +319,8 @@ These rules are encoded in `autoresearch/executor.rs` and surfaced to the agent 
 
 | Code | Meaning | Fix |
 |---|---|---|
-| `NO_ACTIVE_SESSION` | No active session set | `research new` or `research resume <slug>` |
-| `SESSION_NOT_FOUND` | Slug doesn't exist | `research list` to enumerate |
+| `NO_ACTIVE_SESSION` | No active session set | `ascent-research new` or `ascent-research resume <slug>` |
+| `SESSION_NOT_FOUND` | Slug doesn't exist | `ascent-research list` to enumerate |
 | `SLUG_EXISTS` | `new` collision | `--force` to overwrite, or pick fresh slug |
 | `PARENT_NOT_FOUND` | `--from <x>` unknown | Create parent first |
 | `PATH_NOT_FOUND` | `add-local` path missing | Check `~` expansion, use absolute path |
@@ -356,7 +356,7 @@ cargo build -p research --release --features "autoresearch provider-codex"
 
 | Var | Effect |
 |---|---|
-| `ACTIONBOOK_RESEARCH_HOME` | Override `~/.actionbook/research/` (tests use this) |
+| `ACTIONBOOK_RESEARCH_HOME` | Override `~/.actionbook/ascent-research/` (tests use this) |
 | `ACTIONBOOK_BIN` | Path to actionbook binary (default: from `$PATH`) |
 | `ACTIONBOOK_BROWSER_SESSION` | Reuse an existing browser session when a human is using the Chrome profile |
 | `JSON_UI_BIN` | Path to `json-ui` for legacy synthesize path |

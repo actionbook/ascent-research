@@ -45,15 +45,15 @@ jobs:
         continue-on-error: true  # style, not correctness — remove once clean
 
       - name: cargo clippy
-        run: cargo clippy -p research --all-targets -- -D warnings
+        run: cargo clippy -p ascent-research --all-targets -- -D warnings
         continue-on-error: true  # lint, not correctness — remove once clean
 
       - name: cargo build
-        run: cargo build -p research --all-targets
+        run: cargo build -p ascent-research --all-targets
 
       - name: cargo test
         env:
           CI: 1
           RESEARCH_NO_OPEN: 1
           SYNTHESIZE_NO_OPEN: 1
-        run: cargo test -p research --all-targets
+        run: cargo test -p ascent-research --all-targets

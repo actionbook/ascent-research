@@ -10,32 +10,67 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-/// Root directory for all research sessions.
+/// Root directory for NEW research sessions.
 ///
-/// Honors `ACTIONBOOK_RESEARCH_HOME` env var as an override (tests rely on
-/// this to isolate from the real ~/.actionbook). Default path changed to
-/// `~/.actionbook/ascent-research/` in v0.3 (project renamed from
-/// `research-rs` to `ascent-research`); if that directory doesn't exist
-/// but the legacy `~/.actionbook/research/` does, fall back to it so
-/// existing sessions keep working without a manual move.
+/// Always returns the v0.3+ canonical path
+/// `~/.actionbook/ascent-research/` (or the `ACTIONBOOK_RESEARCH_HOME`
+/// override when set). Writes — `research new`, `add`, `loop` — all
+/// land here. The legacy `~/.actionbook/research/` tree is ONLY read
+/// from via `research_root_for_lookup(slug)`; nothing ever writes
+/// there after the rename, so upgraded users stop accreting in the
+/// old path the moment they run any v0.3 command.
 pub fn research_root() -> PathBuf {
     if let Ok(override_path) = std::env::var("ACTIONBOOK_RESEARCH_HOME") {
         if !override_path.is_empty() {
             return PathBuf::from(override_path);
         }
     }
-    let home = dirs::home_dir().expect("home_dir must be resolvable on supported platforms");
-    let ascent = home.join(".actionbook").join("ascent-research");
-    let legacy = home.join(".actionbook").join("research");
-    if !ascent.exists() && legacy.exists() {
-        return legacy;
+    dirs::home_dir()
+        .expect("home_dir must be resolvable on supported platforms")
+        .join(".actionbook")
+        .join("ascent-research")
+}
+
+/// v0.3 rename compatibility: the legacy `~/.actionbook/research/`
+/// directory from v0.2 and earlier. Never written to, only read as a
+/// fallback when a requested slug isn't present under the new
+/// canonical path. Honors `ACTIONBOOK_RESEARCH_HOME` too — when that
+/// override is set the caller is opting out of both roots.
+pub fn legacy_research_root() -> Option<PathBuf> {
+    if std::env::var("ACTIONBOOK_RESEARCH_HOME").is_ok() {
+        return None;
     }
-    ascent
+    let legacy = dirs::home_dir()?
+        .join(".actionbook")
+        .join("research");
+    if legacy.exists() { Some(legacy) } else { None }
+}
+
+/// Resolve the root that currently holds `slug` — canonical first,
+/// legacy as fallback. Callers that need to READ existing session
+/// files go through this; callers that WRITE always use
+/// `research_root()`.
+pub fn root_for_slug(slug: &str) -> PathBuf {
+    let canonical = research_root();
+    if canonical.join(slug).exists() {
+        return canonical;
+    }
+    if let Some(legacy) = legacy_research_root() {
+        if legacy.join(slug).exists() {
+            return legacy;
+        }
+    }
+    canonical
 }
 
 /// Absolute path to a specific session directory.
+///
+/// Resolves through `root_for_slug` so existing sessions under the
+/// legacy `~/.actionbook/research/` tree keep being found after the
+/// v0.3 rename. Newly-created sessions always land under the
+/// canonical `research_root()` path.
 pub fn session_dir(slug: &str) -> PathBuf {
-    research_root().join(slug)
+    root_for_slug(slug).join(slug)
 }
 
 pub fn session_md(slug: &str) -> PathBuf {
