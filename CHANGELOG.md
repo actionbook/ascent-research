@@ -27,9 +27,10 @@ layer on top of the v1/v2 narrative layer.
 - `WriteWikiPage` / `AppendWikiPage` autoresearch actions;
   `WikiPageWritten`, `SchemaUpdated`, `WikiQuery`, `WikiLintRan`
   event variants in the jsonl log.
-- Bundled skill at `skills/research-local-wiki/SKILL.md` — full v3
-  workflow documentation with six scenario playbooks, error-code
-  triage table, and build-target matrix.
+- Bundled skill at `skills/research-cli/SKILL.md` — full CLI reference
+  covering every command surface (online / local / wiki / reports),
+  nine scenario playbooks, loop contract summary, error-code triage,
+  and build-target matrix.
 - HTML report: wiki TOC pill grid above wiki pages, per-page `↑
   index` back-link, bilingual toggle (`--bilingual`, EN/ZH via
   Claude), graceful `diagram-missing` placeholder for unresolved

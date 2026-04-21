@@ -14,7 +14,7 @@ layer on top of the original narrative layer: local file ingest
 retrieval-then-synthesis queries (`wiki query`), and a structural
 health check (`wiki lint`). See the
 [v3 spec](specs/research-local-wiki-v3.spec.md) for the three-layer
-model and the [bundled skill](skills/research-local-wiki/SKILL.md)
+model and the [bundled skill](skills/research-cli/SKILL.md)
 for an agent-facing usage guide.
 
 ## What problem this solves
@@ -304,7 +304,7 @@ turns, so even the loop suite never hits a real LLM.
 
 ## Agent integration
 
-`skills/research-local-wiki/SKILL.md` is a bundled Claude Code /
+`skills/research-cli/SKILL.md` is a bundled Claude Code /
 Codex skill describing the full v3 workflow (session lifecycle +
 SCHEMA.md + add-local + loop + wiki query / lint / render) with six
 scenario playbooks, an error-code triage table, and build-target
@@ -312,7 +312,7 @@ matrix. Symlink or copy into `~/.claude/skills/` to expose it on
 your global skill path:
 
 ```bash
-ln -s "$PWD/skills/research-local-wiki" ~/.claude/skills/research-local-wiki
+ln -s "$PWD/skills/research-cli" ~/.claude/skills/research-cli
 ```
 
 ## Tracing the work
@@ -322,7 +322,7 @@ ln -s "$PWD/skills/research-local-wiki" ~/.claude/skills/research-local-wiki
   discovered during live smoke
 - [packages/research/templates/](packages/research/templates/) —
   template assets + agent-facing authoring guide + diagram primitives
-- [skills/research-local-wiki/](skills/research-local-wiki/) —
+- [skills/research-cli/](skills/research-cli/) —
   bundled agent skill for the v3 workflow
 - [DESIGN.md](DESIGN.md), [PLAN.md](PLAN.md),
   [RETROSPECTIVE.md](RETROSPECTIVE.md) — higher-level context from
