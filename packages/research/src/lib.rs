@@ -9,6 +9,9 @@
 
 #![warn(clippy::all)]
 
+#[cfg(feature = "autoresearch")]
+pub mod autoresearch;
+
 pub mod cli;
 pub mod commands;
 pub mod fetch;

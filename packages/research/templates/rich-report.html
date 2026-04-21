@@ -202,9 +202,60 @@
       text-align: center;
       margin-top: 4rem;
     }
+
+    /* Bilingual toggle — default hides .tr-zh; clicking 中文 reveals
+       each Chinese paragraph directly below its English sibling. */
+    .lang-switch {
+      position: sticky;
+      top: 1rem;
+      float: right;
+      display: flex;
+      gap: 0;
+      background: var(--color-paper);
+      border: 1px solid var(--color-rule);
+      border-radius: 999px;
+      padding: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      z-index: 10;
+    }
+    .lang-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--color-muted);
+      padding: 0.35rem 0.85rem;
+      cursor: pointer;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: inherit;
+      letter-spacing: inherit;
+    }
+    .lang-switch button.active {
+      background: var(--color-ink);
+      color: var(--color-paper);
+    }
+    .tr-zh {
+      display: none;
+      color: var(--color-muted);
+      font-size: 0.94rem;
+      margin-top: -0.4rem;
+      margin-bottom: 0.9rem;
+      padding-left: 0.75rem;
+      border-left: 2px solid var(--color-accent);
+    }
+    body.bilingual .tr-zh {
+      display: block;
+    }
+    body.bilingual .tr-zh:empty {
+      display: none;
+    }
   </style>
 </head>
 <body>
+  <div class="lang-switch" role="group" aria-label="language toggle">
+    <button type="button" data-mode="en" class="active" onclick="document.body.classList.remove('bilingual'); this.classList.add('active'); this.nextElementSibling.classList.remove('active');">EN</button><button type="button" data-mode="zh" onclick="document.body.classList.add('bilingual'); this.classList.add('active'); this.previousElementSibling.classList.remove('active');">中文</button>
+  </div>
   <div class="frame">
 
     <p class="eyebrow">Research report</p>

@@ -75,6 +75,12 @@ pub enum Commands {
         readable: bool,
         #[arg(long)]
         no_readable: bool,
+        /// Override smell-test min body bytes (browser path only).
+        #[arg(long = "min-bytes")]
+        min_bytes: Option<u64>,
+        /// Short-body behavior: "reject" (default) or "warn".
+        #[arg(long = "on-short-body")]
+        on_short_body: Option<String>,
     },
     /// List sources attached to the current or given session.
     Sources {
@@ -97,6 +103,12 @@ pub enum Commands {
         readable: bool,
         #[arg(long)]
         no_readable: bool,
+        /// Override smell-test min body bytes (browser path only).
+        #[arg(long = "min-bytes")]
+        min_bytes: Option<u64>,
+        /// Short-body behavior: "reject" (default) or "warn".
+        #[arg(long = "on-short-body")]
+        on_short_body: Option<String>,
     },
     /// Synthesize session.md + raw/ into report.json + report.html.
     Synthesize {
@@ -105,17 +117,28 @@ pub enum Commands {
         no_render: bool,
         #[arg(long)]
         open: bool,
+        /// Also render Chinese translations next to each English paragraph
+        /// in report.html. Requires a working Claude provider (cc-sdk).
+        /// Costs tokens proportional to report length.
+        #[arg(long)]
+        bilingual: bool,
     },
     /// Render an editorial report from a session (rich-html and future formats).
     Report {
         slug: Option<String>,
-        /// Output format. v1 supports: rich-html.
+        /// Output format. Supported: rich-html, brief-md.
         #[arg(long)]
         format: String,
         #[arg(long)]
         open: bool,
         #[arg(long = "no-open")]
         no_open: bool,
+        /// (brief-md only) print to stdout instead of writing a file.
+        #[arg(long)]
+        stdout: bool,
+        /// (brief-md only) explicit output path; default: <session>/report-brief.md.
+        #[arg(long)]
+        output: Option<String>,
     },
     /// Mark a session closed (files preserved).
     Close { slug: Option<String> },
@@ -140,6 +163,32 @@ pub enum Commands {
         tag: String,
         #[arg(long)]
         open: bool,
+    },
+    /// Diff: list sources fetched-but-uncited (unused) and body-but-unfetched (hallucinated).
+    Diff {
+        slug: Option<String>,
+        /// Only list unused sources; omit the hallucinated/missing set.
+        #[arg(long = "unused-only")]
+        unused_only: bool,
+    },
+    /// Coverage: fact-based completeness stats + report_ready blockers.
+    Coverage { slug: Option<String> },
+    /// Run the autonomous research loop (feature: autoresearch).
+    #[cfg(feature = "autoresearch")]
+    Loop {
+        slug: Option<String>,
+        /// LLM provider: fake | claude | codex.
+        #[arg(long, default_value = "fake")]
+        provider: String,
+        #[arg(long)]
+        iterations: Option<u32>,
+        #[arg(long = "max-actions")]
+        max_actions: Option<u32>,
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// (fake provider only) semicolon-separated JSON responses to replay.
+        #[arg(long = "fake-responses")]
+        fake_responses: Option<String>,
     },
     /// Show help (alias of --help).
     Help,
@@ -194,9 +243,23 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
-        Commands::Add { url, slug, timeout, readable, no_readable } => {
-            commands::add::run(&url, slug.as_deref(), timeout, readable, no_readable)
-        }
+        Commands::Add {
+            url,
+            slug,
+            timeout,
+            readable,
+            no_readable,
+            min_bytes,
+            on_short_body,
+        } => commands::add::run(
+            &url,
+            slug.as_deref(),
+            timeout,
+            readable,
+            no_readable,
+            min_bytes,
+            on_short_body.as_deref(),
+        ),
         Commands::Sources { slug, rejected } => {
             commands::sources::run(slug.as_deref(), rejected)
         }
@@ -207,6 +270,8 @@ fn dispatch(cmd: Commands) -> Envelope {
             timeout,
             readable,
             no_readable,
+            min_bytes,
+            on_short_body,
         } => commands::batch::run(
             &urls,
             slug.as_deref(),
@@ -214,12 +279,21 @@ fn dispatch(cmd: Commands) -> Envelope {
             timeout,
             readable,
             no_readable,
+            min_bytes,
+            on_short_body.as_deref(),
         ),
-        Commands::Synthesize { slug, no_render, open } => {
-            commands::synthesize::run(slug.as_deref(), no_render, open)
+        Commands::Synthesize { slug, no_render, open, bilingual } => {
+            commands::synthesize::run(slug.as_deref(), no_render, open, bilingual)
         }
-        Commands::Report { slug, format, open, no_open } => {
-            commands::report::run(slug.as_deref(), &format, open, no_open)
+        Commands::Report { slug, format, open, no_open, stdout, output } => {
+            commands::report::run(
+                slug.as_deref(),
+                &format,
+                open,
+                no_open,
+                stdout,
+                output.as_deref(),
+            )
         }
         Commands::Close { slug } => commands::close::run(slug.as_deref()),
         Commands::Rm { slug, force } => commands::rm::run(&slug, force),
@@ -227,6 +301,74 @@ fn dispatch(cmd: Commands) -> Envelope {
             commands::route::run(&url, prefer.as_deref(), rules.as_deref(), preset.as_deref())
         }
         Commands::Series { tag, open } => commands::series::run(&tag, open),
+        Commands::Diff { slug, unused_only } => commands::diff::run(slug.as_deref(), unused_only),
+        Commands::Coverage { slug } => commands::coverage::run(slug.as_deref()),
+        #[cfg(feature = "autoresearch")]
+        Commands::Loop {
+            slug,
+            provider,
+            iterations,
+            max_actions,
+            dry_run,
+            fake_responses,
+        } => commands::loop_cmd::run(
+            slug.as_deref(),
+            &provider,
+            iterations,
+            max_actions,
+            dry_run,
+            fake_responses.as_deref().map(split_fake_responses),
+        ),
         Commands::Help => unreachable!("Help handled in run()"),
+    }
+}
+
+/// Split `--fake-responses` into individual JSON turns.
+///
+/// Accepts BOTH separators:
+/// - ASCII Record Separator (`\u{1e}`) — original wire format, used by
+///   integration tests that pipe multiple JSON payloads where `;` or
+///   commas inside the JSON would be ambiguous.
+/// - Semicolon (`;`) — what the `--help` text advertises; also the
+///   ergonomic choice for a developer typing a quick debug replay.
+///
+/// Semicolon takes precedence: if the string contains a literal `;` we
+/// split on it, otherwise we fall back to the record separator. This
+/// keeps the test wire format working and lets CLI users follow the
+/// documented syntax.
+#[cfg(any(feature = "autoresearch", test))]
+fn split_fake_responses(raw: &str) -> Vec<String> {
+    let delim: char = if raw.contains(';') { ';' } else { '\u{1e}' };
+    raw.split(delim).map(str::to_string).collect()
+}
+
+#[cfg(test)]
+mod split_fake_tests {
+    use super::split_fake_responses;
+
+    #[test]
+    fn splits_on_semicolon_when_present() {
+        let v = split_fake_responses("resp1;resp2;resp3");
+        assert_eq!(v, vec!["resp1", "resp2", "resp3"]);
+    }
+
+    #[test]
+    fn falls_back_to_record_separator() {
+        let v = split_fake_responses("a\u{1e}b\u{1e}c");
+        assert_eq!(v, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn single_payload_yields_one_element() {
+        let v = split_fake_responses("just-one");
+        assert_eq!(v, vec!["just-one"]);
+    }
+
+    #[test]
+    fn semicolon_wins_over_record_separator_if_both_present() {
+        // Record separator is vanishingly unlikely inside a JSON payload,
+        // but verify the precedence documented in the helper's docstring.
+        let v = split_fake_responses("a;b\u{1e}c");
+        assert_eq!(v, vec!["a", "b\u{1e}c"]);
     }
 }

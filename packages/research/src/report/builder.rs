@@ -12,7 +12,9 @@
 //! + BrandFooter
 
 use chrono::Utc;
+use regex::Regex;
 use serde_json::{Value, json};
+use std::sync::OnceLock;
 
 use crate::session::{
     event::SessionEvent,
@@ -69,18 +71,18 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
     // 2. Overview
     children.push(section("Overview", "paper", vec![prose(overview)]));
 
-    // 3. Key Findings
+    // 3. Key Findings — only render when the session actually has
+    // `### Title` children under `## Findings`. The numbered sections
+    // (## 01 · TITLE …) are the agent's preferred surface; we leave the
+    // Findings section optional so autoresearch reports don't ship a
+    // "no findings recorded" stub block.
     let findings: Vec<Finding> = sections
         .get("Findings")
         .map(|s| md_parser::parse_findings(s))
         .unwrap_or_default();
     if findings.is_empty() {
-        warnings.push("no findings recorded (`## Findings` section empty or missing)".into());
-        children.push(section(
-            "Key Findings",
-            "star",
-            vec![prose("_(no findings recorded)_")],
-        ));
+        warnings
+            .push("`## Findings` empty — skipped (numbered sections carry the content)".into());
     } else {
         let items: Vec<Value> = findings
             .iter()
@@ -135,9 +137,28 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
 
     // 5. Analysis (Notes section)
     if let Some(body) = sections.get("Notes") {
-        if !body.trim().is_empty() {
+        if !body.trim().is_empty() && !looks_like_placeholder(body) {
             children.push(section("Analysis", "bulb", vec![prose(body)]));
         }
+    }
+
+    // 5b. Numbered content sections (## 01 · TITLE … ## 06 · TITLE) — the
+    // autoresearch loop writes substantive prose + diagram references
+    // here, and the builder used to drop all of it because it only knew
+    // about the legacy Findings / Notes / Conclusion template sections.
+    let mut numbered: Vec<(u32, String, String)> = Vec::new();
+    for (name, body) in &sections {
+        if let Some((num, title)) = parse_numbered_heading(name) {
+            if !body.trim().is_empty() && !looks_like_placeholder(body) {
+                numbered.push((num, title, body.clone()));
+            }
+        }
+    }
+    numbered.sort_by_key(|(n, _, _)| *n);
+    for (num, title, body) in numbered {
+        let display_title = format!("{num:02} · {title}");
+        let section_children = split_body_on_diagrams(&body);
+        children.push(section(&display_title, "paper", section_children));
     }
 
     // 6. Conclusion (optional)
@@ -268,6 +289,58 @@ fn looks_like_placeholder(s: &str) -> bool {
     (t.starts_with("<!--") && t.ends_with("-->")) || t.len() < 10
 }
 
+/// Split a section body at markdown diagram references, returning a mixed
+/// list of Prose + Image child nodes. Each `![alt](diagrams/foo.svg)`
+/// becomes its own Image node (which json-ui renders as `<img>`); the
+/// surrounding text stays as Prose. Prose's markdown parser escapes raw
+/// HTML, so the only reliable way to embed an image is via Image nodes.
+fn split_body_on_diagrams(body: &str) -> Vec<Value> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"!\[([^\]]*)\]\((diagrams/[^)\s]+\.svg)\)").expect("diagram img regex")
+    });
+    let mut out: Vec<Value> = Vec::new();
+    let mut last_end = 0usize;
+    for caps in re.captures_iter(body) {
+        let m = caps.get(0).unwrap();
+        let before = &body[last_end..m.start()];
+        if !before.trim().is_empty() {
+            out.push(prose(before.trim()));
+        }
+        let alt = caps.get(1).map(|mm| mm.as_str()).unwrap_or("");
+        let src = caps.get(2).map(|mm| mm.as_str()).unwrap_or("");
+        out.push(json!({
+            "type": "Image",
+            "props": {
+                "src": src,
+                "alt": alt,
+                "width": "100%"
+            }
+        }));
+        last_end = m.end();
+    }
+    let tail = &body[last_end..];
+    if !tail.trim().is_empty() {
+        out.push(prose(tail.trim()));
+    }
+    if out.is_empty() {
+        out.push(prose(body));
+    }
+    out
+}
+
+/// Parse a `## NN · TITLE` style heading (just the heading text, without
+/// the leading `## `). Returns `(num, title)` if it matches, else None.
+fn parse_numbered_heading(name: &str) -> Option<(u32, String)> {
+    let mut iter = name.splitn(2, '·');
+    let num = iter.next()?.trim().parse::<u32>().ok()?;
+    let title = iter.next()?.trim().to_string();
+    if title.is_empty() {
+        return None;
+    }
+    Some((num, title))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +397,97 @@ Analytical prose here.
     }
 
     #[test]
+    fn numbered_sections_are_rendered_in_order() {
+        let md = "\
+## Overview
+Agent pipeline for fetching and digesting. Enough text for the placeholder test.
+
+## 03 · HOW
+loop architecture body
+
+## 01 · WHY
+problem framing body
+
+## 02 · WHAT
+taxonomy body with a diagram reference ![fig](diagrams/axis.svg) inline.
+";
+        let out = build(&ReportInput {
+            topic: "T",
+            preset: "tech",
+            md,
+            events: &empty_events(),
+        })
+        .unwrap();
+        let titles: Vec<&str> = out.json["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["props"]["title"].as_str())
+            .collect();
+        // Numbered sections must appear, sorted by their leading number.
+        let why_idx = titles.iter().position(|t| *t == "01 · WHY").unwrap();
+        let what_idx = titles.iter().position(|t| *t == "02 · WHAT").unwrap();
+        let how_idx = titles.iter().position(|t| *t == "03 · HOW").unwrap();
+        assert!(why_idx < what_idx && what_idx < how_idx);
+        // Diagram markdown reference must reach the Prose content verbatim —
+        // the json-ui renderer is responsible for turning ![](…) into <img>.
+        let what_section = out.json["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["props"]["title"] == "02 · WHAT")
+            .unwrap();
+        // Section has been split into Prose + Image + Prose. The middle
+        // (or later) child must be an Image node pointing at the SVG.
+        let what_children = what_section["children"].as_array().unwrap();
+        let has_image = what_children
+            .iter()
+            .any(|c| c["type"] == "Image" && c["props"]["src"] == "diagrams/axis.svg");
+        assert!(
+            has_image,
+            "expected an Image child with src=diagrams/axis.svg; got:\n{what_children:#?}"
+        );
+        // No Prose child should still carry the raw markdown image syntax.
+        for c in what_children {
+            if c["type"] == "Prose" {
+                let content = c["props"]["content"].as_str().unwrap_or("");
+                assert!(
+                    !content.contains("![fig]"),
+                    "prose block must not retain the raw markdown image syntax"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_notes_section_is_skipped() {
+        let md = "\
+## Overview
+Real overview content that passes the placeholder heuristic cleanly.
+
+## Notes
+<!-- free-form prose; become the Detailed Analysis section -->
+";
+        let out = build(&ReportInput {
+            topic: "T",
+            preset: "tech",
+            md,
+            events: &empty_events(),
+        })
+        .unwrap();
+        let titles: Vec<&str> = out.json["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["props"]["title"].as_str())
+            .collect();
+        assert!(
+            !titles.contains(&"Analysis"),
+            "placeholder Notes body must not render as Analysis — got {titles:?}"
+        );
+    }
+
+    #[test]
     fn findings_render_as_contribution_list() {
         let out = build(&ReportInput {
             topic: "T",
@@ -340,6 +504,34 @@ Analytical prose here.
         let list = &findings_section["children"][0];
         assert_eq!(list["type"], "ContributionList");
         assert_eq!(list["props"]["items"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn empty_findings_is_skipped_not_stubbed() {
+        let md = "\
+## Overview
+Real overview content that passes the placeholder heuristic cleanly.
+
+## Findings
+<!-- `### Title` + body, one heading per finding -->
+";
+        let out = build(&ReportInput {
+            topic: "T",
+            preset: "tech",
+            md,
+            events: &empty_events(),
+        })
+        .unwrap();
+        let titles: Vec<&str> = out.json["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["props"]["title"].as_str())
+            .collect();
+        assert!(
+            !titles.contains(&"Key Findings"),
+            "empty Findings must drop the block entirely; got {titles:?}"
+        );
     }
 
     #[test]

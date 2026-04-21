@@ -205,3 +205,22 @@ json-ui 报告"的机械组装器。
 - 批评 / 质量反馈(peer review 类)
 - 发布到云端(share link, 评论)
 - Markdown-to-Word / -Notion / -Obsidian 导出(json-ui 自己的事)
+
+## Post-ship delta (2026-04-20)
+
+`research synthesize` 仍然是 json-ui 渲染路径 — 面向**结构化仪表盘报告**。
+但同期**并存**另一条独立路径 `research report`(见
+`specs/research-report-templates.spec.md`),面向**编辑式发表报告**:
+
+| 命令 | 中间形 | 输出 | 外部依赖 |
+|------|-------|-----|--------|
+| `research synthesize` | `report.json` (json-ui schema) | `report.html` | `json-ui` binary |
+| `research report --format rich-html` | 无(直接内嵌 template + markdown) | `report-rich.html` | 无 |
+
+两条路径独立: 独立文件、独立事件、独立测试。Synthesize 负责"数据化呈现",
+report 负责"专栏式呈现"。未来可能统一到一条 `report` 命令下多 format,
+但本 spec **保持 synthesize 的行为不变**。
+
+Agent 选择建议:
+- 给 reviewer / stakeholder 读 → `research report --format rich-html`
+- 给数据管线 / 爬虫 consume → `research synthesize`(JSON 可直接 parse)

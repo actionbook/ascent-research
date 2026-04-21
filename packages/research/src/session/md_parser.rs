@@ -92,6 +92,92 @@ pub struct Metric {
     pub suffix: Option<String>,
 }
 
+/// Extract unique `http(s)://…` URLs that appear inside markdown
+/// `[text](url)` link syntax. Used by `research diff` + `research coverage`
+/// to compare "cited in body" against `source_accepted` events.
+///
+/// If `exclude_sources_block` is true, content between the CLI-maintained
+/// markers `<!-- research:sources-start -->` and `<!-- research:sources-end -->`
+/// is stripped before scanning — that block is a cache, not narrative, so
+/// cited URLs there don't count toward "body citations".
+pub fn extract_http_links(md: &str, exclude_sources_block: bool) -> Vec<String> {
+    let scanned: String = if exclude_sources_block {
+        strip_sources_block(md)
+    } else {
+        md.to_string()
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    let bytes = scanned.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Look for "](http" which is the start of a markdown-link URL.
+        if bytes[i] == b']' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+            let start = i + 2;
+            // Match the closing `)` that balances the opening `(`, so URLs
+            // like `https://en.wikipedia.org/wiki/Function_(mathematics)`
+            // survive instead of getting truncated at the first `)`. A
+            // markdown link may optionally carry a " title" after the URL
+            // (e.g. `[t](url "cap")`); we stop on the first unquoted space
+            // outside nested parens.
+            let tail = &scanned[start..];
+            let mut depth: i32 = 1;
+            let mut in_quotes: Option<u8> = None;
+            let mut end_rel: Option<usize> = None;
+            let tail_bytes = tail.as_bytes();
+            for (k, &b) in tail_bytes.iter().enumerate() {
+                match (b, in_quotes) {
+                    (b'"', None) => in_quotes = Some(b'"'),
+                    (b'\'', None) => in_quotes = Some(b'\''),
+                    (q, Some(open)) if q == open => in_quotes = None,
+                    (b'(', None) => depth += 1,
+                    (b')', None) => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end_rel = Some(k);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(end_rel) = end_rel {
+                let raw = &scanned[start..start + end_rel];
+                // Split off optional `"title"` / `'title'` portion.
+                let url_part = raw.trim().split_whitespace().next().unwrap_or(raw.trim());
+                let url = url_part.trim();
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    if seen.insert(url.to_string()) {
+                        out.push(url.to_string());
+                    }
+                }
+                i = start + end_rel + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn strip_sources_block(md: &str) -> String {
+    let start_marker = "<!-- research:sources-start -->";
+    let end_marker = "<!-- research:sources-end -->";
+    let Some(s) = md.find(start_marker) else {
+        return md.to_string();
+    };
+    let after_start = s + start_marker.len();
+    let Some(e_rel) = md[after_start..].find(end_marker) else {
+        return md.to_string();
+    };
+    let e = after_start + e_rel + end_marker.len();
+    let mut out = String::with_capacity(md.len());
+    out.push_str(&md[..s]);
+    out.push_str(&md[e..]);
+    out
+}
+
 pub fn parse_metrics(section_body: &str) -> Vec<Metric> {
     let mut out = Vec::new();
     for line in section_body.lines() {
@@ -178,5 +264,74 @@ Long notes here.
         let md = "## Only\nbody\n";
         let m = parse_sections(md);
         assert!(!m.contains_key("Overview"));
+    }
+
+    #[test]
+    fn extract_http_links_finds_inline_refs() {
+        let md = "See [A](https://a.test/) and also [B](http://b.test/x).\n\nNot a link: plain text.\n";
+        let mut links = extract_http_links(md, false);
+        links.sort();
+        assert_eq!(
+            links,
+            vec!["http://b.test/x".to_string(), "https://a.test/".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_http_links_skips_non_http_schemes() {
+        let md = "[a](mailto:x@y) [b](ftp://host) [c](/local/path) [ok](https://ok.test)";
+        let links = extract_http_links(md, false);
+        assert_eq!(links, vec!["https://ok.test"]);
+    }
+
+    #[test]
+    fn extract_http_links_dedupes() {
+        let md = "[x](https://a.test) and again [y](https://a.test)";
+        let mut links = extract_http_links(md, false);
+        links.sort();
+        assert_eq!(links, vec!["https://a.test"]);
+    }
+
+    #[test]
+    fn extract_http_links_can_exclude_sources_block() {
+        let md = "Body: [a](https://real.test).\n\n## Sources\n<!-- research:sources-start -->\n- [k · trust 2.0] https://cache.test/\n<!-- research:sources-end -->\n\n## Findings\n[x](https://deeper.test)";
+        let without = extract_http_links(md, true);
+        assert!(without.iter().any(|u| u == "https://real.test"));
+        assert!(without.iter().any(|u| u == "https://deeper.test"));
+        // cache.test is only inside the sources block — excluded
+        assert!(!without.iter().any(|u| u == "https://cache.test/"));
+
+        let with = extract_http_links(md, false);
+        // When we don't exclude, plain-text URL in sources block still isn't
+        // a markdown link syntactically, so it stays out. But anything like
+        // [a](url) inside the block would be caught.
+        assert!(with.iter().any(|u| u == "https://real.test"));
+    }
+
+    #[test]
+    fn extract_http_links_preserves_urls_with_parens() {
+        let md = "See [wiki](https://en.wikipedia.org/wiki/Function_(mathematics)) for details.";
+        let links = extract_http_links(md, false);
+        assert_eq!(
+            links,
+            vec!["https://en.wikipedia.org/wiki/Function_(mathematics)".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_http_links_handles_title_attribute() {
+        let md = r#"Check [x](https://example.com/path "the title") here."#;
+        let links = extract_http_links(md, false);
+        assert_eq!(links, vec!["https://example.com/path".to_string()]);
+    }
+
+    #[test]
+    fn extract_http_links_handles_nested_parens_with_title() {
+        let md = r#"See [y](https://en.wikipedia.org/wiki/Rust_(programming_language) "Rust lang")."#;
+        let links = extract_http_links(md, false);
+        assert_eq!(
+            links,
+            vec!["https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string()]
+        );
     }
 }

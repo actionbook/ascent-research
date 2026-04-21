@@ -5,6 +5,10 @@
 pub mod add;
 pub mod batch;
 pub mod close;
+pub mod coverage;
+pub mod diff;
+#[cfg(feature = "autoresearch")]
+pub mod loop_cmd;
 pub mod list;
 pub mod new;
 pub mod report;

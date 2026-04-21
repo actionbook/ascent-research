@@ -201,3 +201,28 @@ depends: [research-cli-foundation]
 - 自动过期(7 天 stale 清理)——未来 opt-in 命令
 - 跨机器同步(不考虑)
 - 交互式 TUI(除 `rm` 的 simple stdin yes/no)
+
+## Post-ship delta (2026-04-20)
+
+两项增量由 `research-session-series.spec.md` 主导但影响了
+lifecycle 的 CLI 契约,记录在此便于跨 spec 对齐:
+
+### 1. `research new --from <parent>` (session fork)
+
+- 子 session 从父 session 继承 `parent_slug` 到 session.toml
+- 父 session.md 的 `## Overview` 段拷贝为子 session.md 的 `## Context` 块
+- 带 `parent_slug` cycle detection(错误码 `CYCLE_DETECTED`,上限 10 hop)
+- Tags 继承:父 tags ∪ 子 CLI 传入的 `--tag`
+
+### 2. `research new --tag <t>` (可重复)
+
+- 多个 `--tag` flag 追加,存入 session.toml 的 `tags: Vec<String>`
+- `research list --tag <t>` 过滤子集
+- `research series <t>` 产出 HTML index 链接同 tag 所有 session
+
+### 3. `research list --tree`
+
+显示 parent→children ASCII 树。根节点 = 没有 parent_slug 的 session。
+
+所有相关事件依赖的 SessionEvent variants 未变(未新增)— 继承关系在
+session.toml 而非 jsonl 维护。

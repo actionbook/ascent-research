@@ -336,3 +336,168 @@ fn session_not_found_returns_code() {
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "SESSION_NOT_FOUND");
 }
+
+// ── brief-md (spec 2) integration tests ──────────────────────────────────
+
+#[test]
+fn brief_md_happy_path_writes_file_under_2kb() {
+    let env = Env::new();
+    env.prep_session(
+        "bm1",
+        "## Overview\nBrief overview sentence.\n\nSecond paragraph sentence.\n\n## 01 · WHY\nwhy sentence.\n\n## 02 · WHAT\nwhat sentence.\n\n## 03 · HOW\nhow sentence.\n",
+    );
+    env.append_jsonl(
+        "bm1",
+        &[
+            &accepted_event("2026-04-20T10:01:00Z", "https://a.test/", "github-file", 100),
+            &accepted_event("2026-04-20T10:02:00Z", "https://b.test/", "github-tree", 200),
+        ],
+    );
+    let (v, code, stderr, _) = env.research(&[
+        "report", "bm1", "--format", "brief-md", "--no-open", "--json",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["format"], "brief-md");
+    let out_path = v["data"]["output_path"].as_str().unwrap().to_string();
+    let text = fs::read_to_string(&out_path).unwrap();
+    assert!(text.len() < 2048);
+    assert!(text.starts_with("# topic\n"));
+    assert!(text.contains("Brief overview sentence."));
+    assert!(text.contains("- **WHY**"));
+    assert!(text.contains("a.test"));
+    assert!(text.contains("b.test"));
+    assert_eq!(v["data"]["warnings"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn brief_md_writes_default_path_when_no_output_flag() {
+    let env = Env::new();
+    env.prep_session("bm2", "## Overview\nsomething.\n");
+    let (v, code, _, _) = env.research(&[
+        "report", "bm2", "--format", "brief-md", "--no-open", "--json",
+    ]);
+    assert_eq!(code, 0);
+    let expected = env.session_dir("bm2").join("report-brief.md");
+    assert_eq!(
+        v["data"]["output_path"].as_str().unwrap(),
+        expected.display().to_string()
+    );
+    assert!(expected.exists());
+}
+
+#[test]
+fn brief_md_stdout_mode_does_not_write_file() {
+    let env = Env::new();
+    env.prep_session("bm3", "## Overview\nstdout content.\n");
+    let (_, code, _, stdout) = env.research(&[
+        "report", "bm3", "--format", "brief-md", "--stdout",
+    ]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("# topic"));
+    assert!(stdout.contains("stdout content."));
+    let default = env.session_dir("bm3").join("report-brief.md");
+    assert!(!default.exists(), "file should not exist in --stdout mode");
+}
+
+#[test]
+fn brief_md_output_flag_writes_to_specified_path() {
+    let env = Env::new();
+    env.prep_session("bm4", "## Overview\ncustom path.\n");
+    let custom = env.session_dir("bm4").join("sub").join("b.md");
+    fs::create_dir_all(custom.parent().unwrap()).unwrap();
+    let (v, code, _, _) = env.research(&[
+        "report",
+        "bm4",
+        "--format",
+        "brief-md",
+        "--output",
+        custom.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        v["data"]["output_path"].as_str().unwrap(),
+        custom.display().to_string()
+    );
+    assert!(custom.exists());
+    let default = env.session_dir("bm4").join("report-brief.md");
+    assert!(!default.exists(), "default path should not be written when --output is set");
+}
+
+#[test]
+fn brief_md_truncates_overview_over_400_chars() {
+    let env = Env::new();
+    let long = "x".repeat(600);
+    let md = format!("## Overview\n{long}.\n");
+    env.prep_session("bm5", &md);
+    let (v, code, _, _) = env.research(&[
+        "report", "bm5", "--format", "brief-md", "--json",
+    ]);
+    assert_eq!(code, 0);
+    let warnings = v["data"]["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str() == Some("overview_truncated")));
+}
+
+#[test]
+fn brief_md_truncates_findings_over_six() {
+    let env = Env::new();
+    let mut md = String::from("## Overview\nshort.\n\n");
+    for i in 1..=9 {
+        md.push_str(&format!("## {i:02} · S{i}\nbody {i}.\n\n"));
+    }
+    env.prep_session("bm6", &md);
+    let (v, code, _, _) = env.research(&[
+        "report", "bm6", "--format", "brief-md", "--json",
+    ]);
+    assert_eq!(code, 0);
+    let warnings = v["data"]["warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|w| w.as_str() == Some("findings_truncated")));
+}
+
+#[test]
+fn brief_md_missing_overview_still_fatal() {
+    let env = Env::new();
+    env.prep_session(
+        "bm7",
+        "## Overview\n<!-- placeholder -->\n\n## 01 · X\nbody.\n",
+    );
+    let (v, code, _, _) = env.research(&[
+        "report", "bm7", "--format", "brief-md", "--json",
+    ]);
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "MISSING_OVERVIEW");
+}
+
+#[test]
+fn brief_md_ignores_diagram_references() {
+    let env = Env::new();
+    env.prep_session(
+        "bm8",
+        "## Overview\nReal.\n\n![Fig](diagrams/foo.svg)\n\n## 01 · WHY\nwhy body sentence.\n",
+    );
+    let (v, code, _, _) = env.research(&[
+        "report", "bm8", "--format", "brief-md", "--json",
+    ]);
+    assert_eq!(code, 0);
+    let text = fs::read_to_string(v["data"]["output_path"].as_str().unwrap()).unwrap();
+    assert!(!text.contains("![Fig]"));
+    assert!(!text.contains("diagrams/foo.svg"));
+}
+
+#[test]
+fn brief_md_sources_from_jsonl_not_md() {
+    let env = Env::new();
+    env.prep_session("bm9", "## Overview\nsomething real.\n\n## 01 · WHY\nwhy.\n");
+    env.append_jsonl(
+        "bm9",
+        &[
+            &accepted_event("2026-04-20T10:00:00Z", "https://jsonl-only.test/", "k1", 1),
+        ],
+    );
+    let (v, code, _, _) = env.research(&[
+        "report", "bm9", "--format", "brief-md", "--json",
+    ]);
+    assert_eq!(code, 0);
+    let text = fs::read_to_string(v["data"]["output_path"].as_str().unwrap()).unwrap();
+    assert!(text.contains("jsonl-only.test"));
+}

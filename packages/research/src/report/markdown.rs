@@ -94,33 +94,80 @@ fn markdown_to_html(md: &str) -> String {
 /// Remove the boilerplate that session.md always carries — the top H1, the
 /// Objective / Preset / Sources blocks. The body should start at `## Overview`.
 fn strip_scaffolding(md: &str) -> String {
+    // First pass: drop preamble, the `## Sources` block, and any section
+    // whose body is empty or entirely HTML-comment placeholder. The empty-
+    // section skip covers the default template's `## Findings` and
+    // `## Notes` when the loop hasn't filled them in — they used to render
+    // as naked `<h2>` stubs in the rich-html output.
+    let sections = split_on_headings(md);
     let mut out = String::with_capacity(md.len());
-    let mut keep = false;
-    let mut in_sources = false;
-    for line in md.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("## Overview") {
-            keep = true;
+    let mut seen_overview = false;
+    for sec in sections {
+        let heading = sec.heading.trim();
+        if heading.starts_with("## Overview") {
+            seen_overview = true;
         }
-        // Drop the Sources block entirely — jsonl is authoritative.
-        if trimmed.starts_with("## Sources") {
-            in_sources = true;
+        if !seen_overview {
             continue;
         }
-        if in_sources {
-            if trimmed.starts_with("## ") {
-                in_sources = false;
-                // fall through to handle this header on its own
-            } else {
-                continue;
-            }
+        if heading.starts_with("## Sources") {
+            continue;
         }
-        if keep {
-            out.push_str(line);
+        if section_body_is_empty_or_placeholder(&sec.body) {
+            continue;
+        }
+        if !sec.heading.is_empty() {
+            out.push_str(&sec.heading);
             out.push('\n');
         }
+        out.push_str(&sec.body);
     }
     out
+}
+
+struct Section {
+    heading: String,
+    body: String,
+}
+
+fn split_on_headings(md: &str) -> Vec<Section> {
+    let mut out: Vec<Section> = Vec::new();
+    let mut current = Section {
+        heading: String::new(),
+        body: String::new(),
+    };
+    for line in md.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("## ") {
+            if !current.heading.is_empty() || !current.body.is_empty() {
+                out.push(std::mem::replace(
+                    &mut current,
+                    Section {
+                        heading: String::new(),
+                        body: String::new(),
+                    },
+                ));
+            }
+            current.heading = line.to_string();
+        } else {
+            current.body.push_str(line);
+            current.body.push('\n');
+        }
+    }
+    if !current.heading.is_empty() || !current.body.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+fn section_body_is_empty_or_placeholder(body: &str) -> bool {
+    let meaningful: Vec<&str> = body
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .filter(|l| !(l.starts_with("<!--") && l.ends_with("-->")))
+        .collect();
+    meaningful.is_empty()
 }
 
 // ── Aside extraction ────────────────────────────────────────────────────────

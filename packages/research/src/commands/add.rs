@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
-use crate::fetch;
+use crate::fetch::{self, smell::{ShortBodyMode, SmellConfig}};
 use crate::output::Envelope;
 use crate::route::{self, Executor as RouteExecutor};
 use crate::session::{
@@ -21,6 +21,8 @@ pub fn run(
     timeout_ms_arg: Option<u64>,
     readable_flag: bool,
     no_readable_flag: bool,
+    min_bytes_arg: Option<u64>,
+    on_short_body_arg: Option<&str>,
 ) -> Envelope {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -127,9 +129,24 @@ pub fn run(
         return Envelope::fail(CMD, "IO_ERROR", format!("append attempted: {e}"));
     }
 
+    let smell_cfg = match parse_smell_config(min_bytes_arg, on_short_body_arg) {
+        Ok(c) => c,
+        Err(e) => {
+            return Envelope::fail(CMD, "INVALID_ARGUMENT", e)
+                .with_context(json!({ "session": slug, "url": url }));
+        }
+    };
+
     let fetch_start = std::time::Instant::now();
-    let (raw_bytes, outcome, executor_str) =
-        fetch::execute(&route_decision, &slug, raw_n, url, readable, timeout_ms);
+    let (raw_bytes, outcome, executor_str) = fetch::execute(
+        &route_decision,
+        &slug,
+        raw_n,
+        url,
+        readable,
+        timeout_ms,
+        smell_cfg,
+    );
     let duration_ms = fetch_start.elapsed().as_millis() as u64;
 
     let raw_dir = layout::session_raw_dir(&slug);
@@ -296,6 +313,27 @@ fn rel_path(p: &Path) -> String {
     } else {
         p.to_string_lossy().into_owned()
     }
+}
+
+/// Parse `--min-bytes` + `--on-short-body` into a SmellConfig. Shared by
+/// `add` and `batch` — keep the validation logic in one place.
+pub(crate) fn parse_smell_config(
+    min_bytes: Option<u64>,
+    on_short_body: Option<&str>,
+) -> Result<SmellConfig, String> {
+    let short_body_mode = match on_short_body {
+        None | Some("reject") => ShortBodyMode::Reject,
+        Some("warn") => ShortBodyMode::Warn,
+        Some(other) => {
+            return Err(format!(
+                "invalid --on-short-body value '{other}': expected 'warn' or 'reject'"
+            ));
+        }
+    };
+    Ok(SmellConfig {
+        min_bytes_override: min_bytes,
+        short_body_mode,
+    })
 }
 
 fn trust_score(exec: RouteExecutor, readable: bool, bytes: u64) -> f64 {

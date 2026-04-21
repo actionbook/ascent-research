@@ -105,6 +105,87 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+
+    // ── Autoresearch loop events ─────────────────────────────────────────
+    // These are written only when `research loop` is invoked (feature:
+    // autoresearch), but live in the canonical SessionEvent enum so the
+    // event log stays closed — readers match all variants exhaustively.
+    LoopStarted {
+        timestamp: DateTime<Utc>,
+        provider: String,
+        iterations: u32,
+        max_actions: u32,
+        dry_run: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    LoopStep {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        reasoning: String,
+        actions_requested: u32,
+        actions_executed: u32,
+        actions_rejected: u32,
+        duration_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    LoopCompleted {
+        timestamp: DateTime<Utc>,
+        reason: String,
+        iterations_run: u32,
+        actions_executed_total: u32,
+        report_ready: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v2: a previously-fetched source has been digested into a specific
+    /// section of session.md. Subsequent prompt builds filter these URLs
+    /// out of the "unread sources" block so Claude doesn't re-summarize
+    /// the same paper every iteration.
+    SourceDigested {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        url: String,
+        into_section: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v2: a `## Plan` block was authored by the agent (or overwritten).
+    /// The body itself lives in `session.md` — this event records *that*
+    /// and *when* a plan landed, plus its size for audit.
+    PlanWritten {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        body_chars: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v2: an SVG passed `svg_safety::validate` and was written to
+    /// `<session>/diagrams/<path>`.
+    DiagramAuthored {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        path: String,
+        bytes: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v2: an SVG failed `svg_safety::validate` or path safety — no file
+    /// was written. `reason` carries the specific rejection (script tag,
+    /// missing xmlns, oversize, path escape, etc.).
+    DiagramRejected {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        path: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

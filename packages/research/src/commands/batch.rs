@@ -46,6 +46,8 @@ pub fn run(
     timeout_ms_arg: Option<u64>,
     readable_flag: bool,
     no_readable_flag: bool,
+    min_bytes_arg: Option<u64>,
+    on_short_body_arg: Option<&str>,
 ) -> Envelope {
     if urls.is_empty() {
         return Envelope::fail(CMD, "INVALID_ARGUMENT", "no URLs provided (pass ≥ 1)");
@@ -56,6 +58,11 @@ pub fn run(
         .max(1)
         .min(MAX_CONCURRENCY);
     let timeout_ms = timeout_ms_arg.unwrap_or(DEFAULT_TIMEOUT_MS);
+
+    let smell_cfg = match super::add::parse_smell_config(min_bytes_arg, on_short_body_arg) {
+        Ok(c) => c,
+        Err(e) => return Envelope::fail(CMD, "INVALID_ARGUMENT", e),
+    };
 
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -182,6 +189,7 @@ pub fn run(
         let tx = tx.clone();
         let slug_owned = slug.clone();
         let timeout = timeout_ms;
+        let cfg = smell_cfg;
         let h = thread::spawn(move || {
             loop {
                 let next = { q.lock().unwrap().pop_front() };
@@ -194,6 +202,7 @@ pub fn run(
                     &job.url,
                     job.readable,
                     timeout,
+                    cfg,
                 );
                 let _ = tx.send(FetchResult {
                     job,

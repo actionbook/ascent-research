@@ -47,10 +47,11 @@ pub fn execute(
     url: &str,
     readable: bool,
     timeout_ms: u64,
+    smell_cfg: smell::SmellConfig,
 ) -> (Vec<u8>, FetchOutcome, String) {
     match RouteExecutor::parse(&decision.executor) {
         Some(RouteExecutor::Postagent) => run_postagent(decision, timeout_ms),
-        Some(RouteExecutor::Browser) => run_browser(slug, raw_n, url, readable, timeout_ms),
+        Some(RouteExecutor::Browser) => run_browser(slug, raw_n, url, readable, timeout_ms, smell_cfg),
         None => (
             Vec::new(),
             FetchOutcome {
@@ -144,15 +145,19 @@ fn run_browser(
     url: &str,
     readable: bool,
     timeout_ms: u64,
+    smell_cfg: smell::SmellConfig,
 ) -> (Vec<u8>, FetchOutcome, String) {
     match browser::run(slug, tab_n, url, readable, timeout_ms) {
         Ok(run) => {
-            let outcome = smell::judge_browser(&smell::BrowserResponse {
-                requested_url: url,
-                observed_url: &run.observed_url,
-                body_bytes: &run.body,
-                readable_mode: readable,
-            });
+            let outcome = smell::judge_browser_with(
+                &smell::BrowserResponse {
+                    requested_url: url,
+                    observed_url: &run.observed_url,
+                    body_bytes: &run.body,
+                    readable_mode: readable,
+                },
+                smell_cfg,
+            );
             (run.raw.raw_stdout, outcome, "browser".into())
         }
         Err(msg) => {

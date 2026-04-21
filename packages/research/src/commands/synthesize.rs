@@ -2,11 +2,15 @@ use chrono::Utc;
 use serde_json::json;
 use std::fs;
 use std::io::IsTerminal;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
 use crate::output::Envelope;
 use crate::report::builder::{self, BuildError, ReportInput};
+use crate::report::markdown::{self, RenderError};
+use crate::report::sources;
+use crate::report::template::{self, Slots};
 use crate::session::{
     active, config,
     event::{SessionEvent, SynthesizeStage},
@@ -15,7 +19,7 @@ use crate::session::{
 
 const CMD: &str = "research synthesize";
 
-pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool) -> Envelope {
+pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool) -> Envelope {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
         None => match active::get_active() {
@@ -112,12 +116,19 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool) -> Envelope {
         return Envelope::fail(CMD, "IO_ERROR", format!("write report.json: {e}"));
     }
 
-    // Render stage
+    // Render stage — rich-html only. The json-ui rendering path was
+    // removed; `synthesize` now emits the same warm-paper editorial HTML
+    // that `research report --format rich-html` produces, so there is a
+    // single canonical report template across the project.
     let mut report_html_path: Option<String> = None;
     let mut render_error: Option<String> = None;
+    let mut render_warnings: Vec<String> = Vec::new();
     if !no_render {
-        match render_html(&report_json_path) {
-            Ok(html_path) => report_html_path = Some(rel_path(&html_path)),
+        match render_rich_html(&slug, &md, &cfg.topic, &cfg.tags, &cfg.preset, bilingual) {
+            Ok((html_path, warnings)) => {
+                report_html_path = Some(rel_path(&html_path));
+                render_warnings = warnings;
+            }
             Err(e) => render_error = Some(e),
         }
     }
@@ -178,6 +189,9 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool) -> Envelope {
             }));
     }
 
+    let mut all_warnings = built.warnings.clone();
+    all_warnings.extend(render_warnings);
+
     Envelope::ok(
         CMD,
         json!({
@@ -187,35 +201,82 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool) -> Envelope {
             "rejected_sources": built.rejected_count,
             "duration_ms": duration_ms,
             "open_skipped": open_skipped,
-            "warnings": built.warnings,
+            "warnings": all_warnings,
         }),
     )
     .with_context(json!({ "session": slug }))
 }
 
-fn render_html(json_path: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let html_path = json_path.with_extension("html");
-    let bin = std::env::var("JSON_UI_BIN").unwrap_or_else(|_| "json-ui".to_string());
-    let output = Command::new(&bin)
-        .arg("render")
-        .arg(json_path)
-        .arg("-o")
-        .arg(&html_path)
-        .output()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => format!(
-                "json-ui binary '{bin}' not found on PATH (install json-ui or set JSON_UI_BIN)"
-            ),
-            _ => format!("spawn json-ui: {e}"),
-        })?;
-    if !output.status.success() {
-        return Err(format!(
-            "json-ui render exit {}: {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(html_path)
+/// Render the rich-html report to `<session>/report.html` using the same
+/// pipeline as `research report --format rich-html`. Returns the path and
+/// any non-fatal warnings (e.g. multiple-aside detection from markdown
+/// render). `DiagramOutOfBounds` bubbles up as a fatal render error.
+fn render_rich_html(
+    slug: &str,
+    md: &str,
+    topic: &str,
+    tags: &[String],
+    preset: &str,
+    bilingual: bool,
+) -> Result<(PathBuf, Vec<String>), String> {
+    let session_dir = layout::session_dir(slug);
+    let rendered = markdown::render_body(md, &session_dir).map_err(|e| match e {
+        RenderError::DiagramOutOfBounds(p) => format!(
+            "diagram_out_of_bounds: '{}' resolves outside session_dir/diagrams/",
+            p.display()
+        ),
+    })?;
+    let sources_section = sources::build_from_jsonl(&layout::session_jsonl(slug));
+    let mut warnings = rendered.warnings.clone();
+    warnings.extend(sources_section.warnings.iter().cloned());
+
+    let body_html = if bilingual {
+        match crate::report::bilingual::inject_zh_translations(&rendered.body_html) {
+            Ok((augmented, note)) => {
+                if let Some(n) = note {
+                    warnings.push(n);
+                }
+                augmented
+            }
+            Err(e) => {
+                warnings.push(format!("bilingual_skipped: {e}"));
+                rendered.body_html.clone()
+            }
+        }
+    } else {
+        rendered.body_html.clone()
+    };
+
+    let tags_str = if tags.is_empty() {
+        String::new()
+    } else {
+        format!(" · tagged {}", tags.join(", "))
+    };
+    let subtitle = format!(
+        "Session: <code>{slug}</code>{tags_str} · preset <code>{preset}</code>"
+    );
+    let session_footer = format!(
+        "Session · {} · {} accepted source{} · {} bytes",
+        session_dir.display(),
+        sources_section.count,
+        if sources_section.count == 1 { "" } else { "s" },
+        sources_section.total_bytes,
+    );
+
+    let slots = Slots {
+        title: topic.to_string(),
+        subtitle,
+        aside_quote: rendered.aside_html,
+        body_html,
+        sources_html: sources_section.html,
+        generated_at: Utc::now().to_rfc3339(),
+        session_footer,
+    };
+    let html = template::render(&slots);
+
+    let html_path = layout::session_dir(slug).join("report.html");
+    fs::write(&html_path, &html).map_err(|e| format!("write report.html: {e}"))?;
+    Ok((html_path, warnings))
 }
 
 fn should_skip_open() -> bool {

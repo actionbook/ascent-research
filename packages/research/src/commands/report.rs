@@ -16,6 +16,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::output::Envelope;
+use crate::report::brief_md::{self, BriefInput};
 use crate::report::markdown::{self, RenderError};
 use crate::report::sources;
 use crate::report::template::{self, Slots};
@@ -25,14 +26,21 @@ const CMD: &str = "research report";
 
 /// Supported format values. Keep in one place so unknown-format errors can
 /// list what the current binary can actually produce.
-const SUPPORTED_FORMATS: &[&str] = &["rich-html"];
+const SUPPORTED_FORMATS: &[&str] = &["rich-html", "brief-md"];
 
 /// Formats named in the spec that will be wired up later. Kept separate from
 /// `SUPPORTED_FORMATS` so the envelope error can say "recognized but not yet
 /// implemented" vs "never heard of it".
-const FUTURE_FORMATS: &[&str] = &["brief-md", "slides-reveal", "json-export"];
+const FUTURE_FORMATS: &[&str] = &["slides-reveal", "json-export"];
 
-pub fn run(slug_arg: Option<&str>, format: &str, open: bool, _no_open: bool) -> Envelope {
+pub fn run(
+    slug_arg: Option<&str>,
+    format: &str,
+    open: bool,
+    _no_open: bool,
+    stdout: bool,
+    output: Option<&str>,
+) -> Envelope {
     // ── Format validation ─────────────────────────────────────────────────
     if !SUPPORTED_FORMATS.contains(&format) {
         return if FUTURE_FORMATS.contains(&format) {
@@ -95,6 +103,11 @@ pub fn run(slug_arg: Option<&str>, format: &str, open: bool, _no_open: bool) -> 
     }
 
     let start = Instant::now();
+
+    // ── Format: brief-md ──────────────────────────────────────────────────
+    if format == "brief-md" {
+        return run_brief_md(&slug, &cfg.topic, &md, start, stdout, output);
+    }
 
     // ── Assemble slots (Phase A: stubbed body/aside/sources) ─────────────
     let tags_str = if cfg.tags.is_empty() {
@@ -193,6 +206,56 @@ pub fn run(slug_arg: Option<&str>, format: &str, open: bool, _no_open: bool) -> 
             "sources_count": sources_count,
             "total_bytes": total_bytes,
             "phase": "C",
+        }),
+    )
+    .with_context(json!({ "session": slug }))
+}
+
+/// Render `--format brief-md`. Shares Overview gate + slug resolution with
+/// the rich-html path but has its own output routing (stdout / explicit
+/// --output / default `<session>/report-brief.md`).
+fn run_brief_md(
+    slug: &str,
+    topic: &str,
+    md: &str,
+    start: Instant,
+    stdout: bool,
+    output: Option<&str>,
+) -> Envelope {
+    let jsonl_path = layout::session_jsonl(slug);
+    let brief = brief_md::build(BriefInput {
+        topic,
+        slug,
+        md,
+        jsonl_path: &jsonl_path,
+    });
+    let bytes = brief.text.len() as u64;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let output_path: Option<std::path::PathBuf> = if stdout {
+        print!("{}", brief.text);
+        None
+    } else {
+        let path = match output {
+            Some(p) => std::path::PathBuf::from(p),
+            None => layout::session_dir(slug).join("report-brief.md"),
+        };
+        if let Err(e) = fs::write(&path, &brief.text) {
+            return Envelope::fail(CMD, "RENDER_FAILED", format!("write brief: {e}"))
+                .with_context(json!({ "session": slug }));
+        }
+        Some(path)
+    };
+
+    Envelope::ok(
+        CMD,
+        json!({
+            "format": "brief-md",
+            "output_path": output_path.as_ref().map(|p| p.display().to_string()),
+            "stdout": stdout,
+            "bytes": bytes,
+            "warnings": brief.warnings,
+            "duration_ms": duration_ms,
         }),
     )
     .with_context(json!({ "session": slug }))
