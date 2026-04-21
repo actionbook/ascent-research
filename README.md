@@ -17,6 +17,93 @@ health check (`wiki lint`). See the
 model and the [bundled skill](skills/research-cli/SKILL.md)
 for an agent-facing usage guide.
 
+## What makes it different
+
+Five things that set `research-rs` apart from one-shot deep-research
+tools (OpenAI DR, Perplexity DR, active-research skill, etc.). Each
+was validated end-to-end across live sessions (tokio source tree
+ingest, an agent-SE Obsidian vault analysis, a mixed online + local
+AI coding agents comparison, and self-research of this repo):
+
+### 0. Autoresearch lineage — 2-file resume, extended to reports
+
+`research-rs` inherits the core loop architecture from
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch)
+(and its descendant
+[pi-autoresearch](https://github.com/davebcn87/pi-autoresearch)):
+a fresh agent can resume any session from exactly two files —
+`session.md` (human-readable living document) + `session.jsonl`
+(append-only event log) — even after process death, context reset,
+or days of inactivity. Every action writes to both files; every
+reader-of-record reads from them. But where the original
+autoresearch optimizes a single scalar (training loss, test speed,
+bundle size) via `edit → benchmark → keep-or-revert`, `research-rs`
+generalizes the same loop grammar to *research* — `plan → fetch →
+digest → write_section / write_wiki_page / write_diagram → repeat`
+— producing a figure-rich report plus a durable cross-session wiki
+instead of a single optimized metric. A third file (`SCHEMA.md`,
+user-editable mid-session guidance) and a fourth layer (`wiki/`,
+karpathy LLM-Wiki-style entity pages) extend the original 2-file
+model without breaking its resume invariant.
+
+### 1. Incremental research — sessions resume, knowledge accretes
+
+Every session is a git-like directory that lives across days and
+loop runs. `research resume <slug>` picks up exactly where a prior
+turn stopped. `schema edit` changes emphasis mid-session. New
+sources can be appended via `add / batch / add-local` between
+runs. Wiki pages **accrue** via `append_wiki_page` — new findings
+grow existing entity pages instead of overwriting them. Coverage
+signals (`sources_unused`, `diagrams_referenced`, `wiki_pages`,
+`wiki_total_bytes`) let each loop run know *what's still open*
+from the previous turn, so it continues rather than restarts.
+One-shot DR tools can't do this — when they finish, they're done.
+
+### 2. Three-way ingest, one pipeline
+
+`add` (HTTP via `postagent`) + `add-local` (file trees) + browser
+fallback (via `actionbook browser` for JS-heavy pages) all go
+through **the same smell test → session.jsonl → wiki → report**
+path. A single session can cite GitHub READMEs, arXiv papers,
+Anthropic blog posts, and the user's private Obsidian notes
+side-by-side in one wiki page's `sources:` frontmatter — the
+renderer doesn't care about URL scheme. `source_kind_diversity`
+in `coverage` reports how mixed the ingest actually is, so
+"literature-only" or "blog-only" reports surface as warnings.
+
+### 3. Figure-rich by contract
+
+A narrative-only report is considered **incomplete**. The system
+prompt carries a non-negotiable FIGURE-RICH CONTRACT: target
+≥ 1 SVG per numbered section, bidirectional rule that every
+`![](diagrams/x.svg)` markdown reference must have a matching
+`write_diagram` action (and vice versa). Three-layer enforcement:
+system prompt rule + user prompt nag block listing any unresolved
+references + infra-level `preserve_diagram_refs` guaranteeing a
+section overwrite never silently drops a figure. Orphan SVGs
+(written-but-never-referenced) fall into a safety-net
+`Supplementary figures` block — the agent's work is never lost.
+Every SVG is hand-drawn inline (no external assets, no screenshots).
+
+### 4. Infra-enforced correctness + error-code taxonomy
+
+Agents can't "just summarize this for me." Every fetch goes
+through a smell test at the CLI layer before it reaches the LLM;
+rejections surface in `session.jsonl` with a specific reason
+(`too_short`, `wrong_url`, `browser_chrome_error`). Section
+overwrites preserve figures. Wiki writes are append-safe. Coverage
+computes `sources_hallucinated` — URLs the agent cited that were
+never actually fetched — and makes them a `report_ready` blocker.
+Every error returns a machine-readable code
+(`NO_ACTIVE_SESSION`, `SMELL_REJECTED`, `DIAGRAM_OUT_OF_BOUNDS`,
+`WIKI_EMPTY`, `PROVIDER_NOT_AVAILABLE`, …) so agents can route
+recovery deterministically without parsing prose.
+
+These four together make `research-rs` a research **substrate** —
+not a "summarize this for me" chatbot — aimed at teams that want
+to accumulate a durable knowledge base across many sessions rather
+than generate a one-off report.
+
 ## What problem this solves
 
 Research agents (Claude Code, Codex, custom) repeatedly hit the same
