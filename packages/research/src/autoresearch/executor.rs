@@ -696,11 +696,12 @@ fn coverage_json(slug: &str, research_bin: &Path) -> Value {
 
 fn coverage_signature(coverage: &Value) -> String {
     // Deterministic fingerprint of the numeric fields only — prose changes
-    // don't count toward divergence. v3: `wiki_pages` is included so a
-    // loop that only writes wiki pages (the preferred ingest surface)
-    // is still recognized as making progress. Without this, wiki-first
-    // sessions hit a false-positive "diverged" termination as soon as
-    // three wiki writes land without a numbered section.
+    // don't count toward divergence. v3: `wiki_pages` alone isn't enough —
+    // `append_wiki_page` adds bytes without moving the page count, so
+    // three append-only turns fingerprinted identically and false-
+    // positive diverged on tokio-v3. `wiki_total_bytes` fixes that while
+    // still catching real divergence (a loop that's emitting actions
+    // without touching any tracked field).
     let keys = [
         "overview_chars",
         "numbered_sections_count",
@@ -714,6 +715,7 @@ fn coverage_signature(coverage: &Value) -> String {
         "sources_hallucinated",
         "wiki_pages",
         "wiki_pages_with_frontmatter",
+        "wiki_total_bytes",
     ];
     keys.iter()
         .map(|k| format!("{k}={}", coverage.get(k).unwrap_or(&Value::Null)))
@@ -1232,6 +1234,17 @@ mod tests {
     fn coverage_signature_differs_when_any_field_changes() {
         let a = json!({"overview_chars": 100, "numbered_sections_count": 3});
         let b = json!({"overview_chars": 200, "numbered_sections_count": 3});
+        assert_ne!(coverage_signature(&a), coverage_signature(&b));
+    }
+
+    #[test]
+    fn coverage_signature_tracks_wiki_total_bytes_for_append_progress() {
+        // v3 second regression: wiki_pages alone missed `append_wiki_page`
+        // progress (page count unchanged, body grows). tokio-v3 loop #5
+        // caught this — 3 append turns in a row false-positive diverged.
+        // wiki_total_bytes fixes it.
+        let a = json!({"wiki_pages": 14, "wiki_total_bytes": 40000});
+        let b = json!({"wiki_pages": 14, "wiki_total_bytes": 42500});
         assert_ne!(coverage_signature(&a), coverage_signature(&b));
     }
 

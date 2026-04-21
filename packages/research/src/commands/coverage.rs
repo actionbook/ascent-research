@@ -166,6 +166,7 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             "sources_hallucinated": sources_hallucinated,
             "wiki_pages": wiki_stats.pages,
             "wiki_pages_with_frontmatter": wiki_stats.pages_with_frontmatter,
+            "wiki_total_bytes": wiki_stats.total_bytes,
             "broken_wiki_links": wiki_stats.broken_links,
             "report_ready": report_ready,
             "report_ready_blockers": blockers,
@@ -182,6 +183,12 @@ struct WikiStats {
     pages_with_frontmatter: usize,
     /// `[[slug]]` in a wiki page pointing at a non-existent page.
     broken_links: usize,
+    /// Sum of body sizes across all wiki pages in bytes. Exposed so the
+    /// autoresearch divergence detector can tell "3 append-only turns"
+    /// (bytes grow, page count stays) apart from "no progress" —
+    /// without this, a session that spent 3 turns appending to existing
+    /// pages false-positive diverged.
+    total_bytes: usize,
     /// Union of every `sources: [...]` URL listed in any page's
     /// frontmatter — merged into body_links so a wiki-only digest
     /// removes that URL from sources_unused.
@@ -203,6 +210,7 @@ fn collect_wiki_stats(slug: &str) -> WikiStats {
         let Ok(body) = wiki::read_page(slug, page) else {
             continue;
         };
+        stats.total_bytes += body.len();
         let (fm, rest) = wiki::split_frontmatter(&body);
         let has_fm = fm.kind.is_some()
             || !fm.sources.is_empty()
