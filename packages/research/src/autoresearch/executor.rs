@@ -407,20 +407,52 @@ Workflow: plan → fetch → digest + write → mark diagrams.
   wrote (or an existing section). Use this to link the source to its
   landing place in the narrative.
 
-Wiki pages (v3, optional). When a topic has durable entities or
-concepts worth a dedicated page — a library component, a protocol, a
-named framework — prefer `write_wiki_page` over squeezing everything
-into a numbered section. Page slug is `[a-z0-9_-]{1,64}`. Add
-frontmatter:
+Wiki pages — the PREFERRED ingest surface (v3).
+
+When a source maps cleanly to a durable named thing — a library
+component, a protocol, a paper, a dataset, a framework — write a wiki
+page rather than adding another numbered section. Durable entities
+accumulate across runs; numbered sections are report-shaped and get
+overwritten.
+
+Page slug rules: `[a-z0-9_-]{1,64}`. Convention:
+  - entity pages: `<name>` (e.g. `scheduler`, `openviking`)
+  - concept pages: `concept-<name>` (e.g. `concept-work-stealing`)
+  - source summaries: `source-<domain>-<hash>` (e.g. `source-arxiv-2410-04444`)
+  - comparisons: `cmp-<a>-vs-<b>`
+
+Required frontmatter for new pages:
   ---
   kind: concept | entity | source-summary | comparison
-  sources: [https://...]
-  related: [other-slug]
+  sources: [https://...]        # every URL the page draws from
+  related: [other-slug, ...]    # cross-references
+  updated: YYYY-MM-DD           # today
   ---
-- Use `append_wiki_page` for incremental findings on an existing page;
-  don't re-emit `write_wiki_page` with the full body each iteration.
-- Link between pages with `[[slug]]` — the renderer resolves these to
-  the local page on build.
+
+Workflow per source:
+  1. If the source is a named thing the session will return to → emit
+     `write_wiki_page` with a fresh slug. Include the source URL in
+     `sources:` and cite it in the body as `[...](URL)`.
+  2. If the source extends a page that already exists (see the
+     "Existing wiki pages" block in the user prompt) → emit
+     `append_wiki_page` instead of re-writing the whole body. Keep
+     appends focused: one new finding per append.
+  3. Always pair with `digest_source` so the URL leaves the unread
+     queue. The `into_section` field for wiki-backed digests should
+     be the wiki page itself, e.g. `into_section: "wiki:scheduler"`.
+  4. Cross-link aggressively. Use `[[slug]]` in prose whenever you
+     reference another wiki page. The renderer turns these into
+     anchor links; broken links surface in coverage + warnings.
+
+When NOT to use wiki: pure narrative (overview, plan, editorial
+aside), one-shot findings that don't warrant their own page, and
+transient lint comments. Those belong in numbered sections or the
+overview.
+
+Mental model shift: the numbered sections are the report's narrative
+spine. The wiki is the durable knowledge graph the narrative draws
+from. Build the wiki first, let the numbered sections cite `[[slug]]`
+pages instead of repeating their content.
 
 Source diversity. The CLI routes these kinds efficiently without a browser:
   - arxiv.org/abs/{id}                          → paper abstract (fast)
@@ -462,6 +494,31 @@ fn user_prompt(
     out.push_str("coverage:\n");
     out.push_str(&serde_json::to_string_pretty(coverage).unwrap_or_default());
     out.push_str("\n\n");
+
+    // v3: list existing wiki pages so the agent chooses `append_wiki_page`
+    // when a relevant page already exists rather than creating a
+    // near-duplicate. Only shows page slugs + the frontmatter kind —
+    // full page bodies would bloat the prompt. Agent can `wiki show`
+    // mentally by referring to the slug and (if needed) emitting
+    // `append_wiki_page` with additive content.
+    let existing_pages = crate::session::wiki::list_pages(slug);
+    if !existing_pages.is_empty() {
+        out.push_str(&format!(
+            "existing wiki pages ({}) — prefer `append_wiki_page` over creating a near-duplicate:\n",
+            existing_pages.len()
+        ));
+        for page_slug in &existing_pages {
+            let kind_hint = crate::session::wiki::read_page(slug, page_slug)
+                .ok()
+                .map(|body| {
+                    let (fm, _rest) = crate::session::wiki::split_frontmatter(&body);
+                    fm.kind.unwrap_or_else(|| "—".to_string())
+                })
+                .unwrap_or_else(|| "—".to_string());
+            out.push_str(&format!("  - {page_slug}  [{kind_hint}]\n"));
+        }
+        out.push('\n');
+    }
 
     if !unread.is_empty() {
         out.push_str(&format!(
