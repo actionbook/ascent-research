@@ -56,6 +56,18 @@ pub fn session_report_html(slug: &str) -> PathBuf {
     session_dir(slug).join("report.html")
 }
 
+/// Wiki page root — `~/.actionbook/research/<slug>/wiki/`. Contains
+/// per-entity / per-concept / per-source markdown pages the agent
+/// creates through `WriteWikiPage` / `AppendWikiPage`.
+pub fn session_wiki_dir(slug: &str) -> PathBuf {
+    session_dir(slug).join("wiki")
+}
+
+/// Absolute path for a given wiki page slug within a session.
+pub fn session_wiki_page(slug: &str, page_slug: &str) -> PathBuf {
+    session_wiki_dir(slug).join(format!("{page_slug}.md"))
+}
+
 // ── Lockfile paths ─────────────────────────────────────────────────────────
 //
 // All lock files use fs2::FileExt::lock_exclusive (advisory flock under the
