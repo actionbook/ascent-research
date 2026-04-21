@@ -19,11 +19,32 @@ for an agent-facing usage guide.
 
 ## What makes it different
 
-Four things that set `research-rs` apart from one-shot deep-research
+Five things that set `research-rs` apart from one-shot deep-research
 tools (OpenAI DR, Perplexity DR, active-research skill, etc.). Each
-was validated end-to-end across two live sessions (tokio source
-tree ingest and a mixed agent-SE series analysis from the user's
-Obsidian vault):
+was validated end-to-end across live sessions (tokio source tree
+ingest, an agent-SE Obsidian vault analysis, a mixed online + local
+AI coding agents comparison, and self-research of this repo):
+
+### 0. Autoresearch lineage — 2-file resume, extended to reports
+
+`research-rs` inherits the core loop architecture from
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch)
+(and its descendant
+[pi-autoresearch](https://github.com/davebcn87/pi-autoresearch)):
+a fresh agent can resume any session from exactly two files —
+`session.md` (human-readable living document) + `session.jsonl`
+(append-only event log) — even after process death, context reset,
+or days of inactivity. Every action writes to both files; every
+reader-of-record reads from them. But where the original
+autoresearch optimizes a single scalar (training loss, test speed,
+bundle size) via `edit → benchmark → keep-or-revert`, `research-rs`
+generalizes the same loop grammar to *research* — `plan → fetch →
+digest → write_section / write_wiki_page / write_diagram → repeat`
+— producing a figure-rich report plus a durable cross-session wiki
+instead of a single optimized metric. A third file (`SCHEMA.md`,
+user-editable mid-session guidance) and a fourth layer (`wiki/`,
+karpathy LLM-Wiki-style entity pages) extend the original 2-file
+model without breaking its resume invariant.
 
 ### 1. Incremental research — sessions resume, knowledge accretes
 
