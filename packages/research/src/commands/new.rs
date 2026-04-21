@@ -7,7 +7,7 @@ use crate::output::Envelope;
 use crate::session::{
     active, config,
     event::SessionEvent,
-    layout, log, md_parser, md_template,
+    layout, log, md_parser, md_template, schema,
     slug as slugmod,
 };
 
@@ -107,6 +107,14 @@ pub fn run(
     if let Err(e) = fs::write(layout::session_md(&resolved), md) {
         let _ = fs::remove_dir_all(&dir);
         return Envelope::fail(CMD, "IO_ERROR", format!("write session.md: {e}"));
+    }
+
+    // Seed SCHEMA.md with the starter template so every session has
+    // user-editable loop guidance from iteration zero. Non-fatal — if
+    // we can't write it we just log and move on; the loop treats a
+    // missing schema as "use defaults."
+    if let Err(e) = schema::write_starter_if_absent(&resolved) {
+        eprintln!("⚠ warning: could not seed SCHEMA.md: {e}");
     }
 
     let ev = SessionEvent::SessionCreated {

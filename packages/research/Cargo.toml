@@ -1,8 +1,8 @@
 [package]
 name = "research"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Research workflow CLI — orchestrates postagent + actionbook browser for reproducible research sessions"
+description = "Research workflow CLI — orchestrates postagent + actionbook browser for reproducible research sessions, with per-session wiki pages and a figure-rich autonomous loop (v0.2)"
 license = "MIT"
 
 [[bin]]
@@ -23,6 +23,8 @@ fs2 = "0.4"
 toml = "0.8"
 regex = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+walkdir = "2"
+globset = "0.4"
 
 # Autoresearch loop dependencies — each is optional and only pulled in under
 # the matching feature. Default build stays LLM-free.

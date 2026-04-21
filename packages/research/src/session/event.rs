@@ -186,6 +186,62 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+
+    /// v3: a wiki page was created, replaced, or appended to via
+    /// `WriteWikiPage` / `AppendWikiPage`. `mode` is "create" | "replace"
+    /// | "append". `body_chars` helps coverage judge page size without
+    /// reading the file.
+    WikiPageWritten {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        slug: String,
+        mode: String,
+        body_chars: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v3: the session `SCHEMA.md` was created or edited (by `research
+    /// new` seed, `research schema edit`, or direct user edit detected
+    /// via mtime change). Loop readers re-read SCHEMA.md on the next
+    /// iteration; recording the write lets `research status` surface
+    /// "schema touched since last loop step." `body_chars` gauges how
+    /// much schema guidance is in play.
+    SchemaUpdated {
+        timestamp: DateTime<Utc>,
+        body_chars: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v3: `research wiki query <question>` ran. `relevant_pages` is the
+    /// slug list chosen by the retrieval step; `answer_slug` is set iff
+    /// `--save-as <slug>` persisted the answer as a new wiki page. The
+    /// event is output-only (it doesn't block coverage) and surfaces in
+    /// `research status` as "queries asked."
+    WikiQuery {
+        timestamp: DateTime<Utc>,
+        question: String,
+        relevant_pages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer_slug: Option<String>,
+        answer_chars: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v3: `research wiki lint` ran. Counts only — the full diagnostic
+    /// payload lives in the CLI envelope (and optionally stdout), not
+    /// in the event log. Non-blocker: lint never fails a `coverage`
+    /// blocker, it's a health-check for humans.
+    WikiLintRan {
+        timestamp: DateTime<Utc>,
+        issues: u32,
+        orphans: u32,
+        broken_links: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

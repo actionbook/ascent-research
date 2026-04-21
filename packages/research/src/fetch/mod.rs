@@ -4,6 +4,7 @@
 //! orchestrate, but never spawn subprocess or parse response JSON directly.
 
 pub mod browser;
+pub mod local;
 pub mod postagent;
 pub mod smell;
 
@@ -52,6 +53,7 @@ pub fn execute(
     match RouteExecutor::parse(&decision.executor) {
         Some(RouteExecutor::Postagent) => run_postagent(decision, timeout_ms),
         Some(RouteExecutor::Browser) => run_browser(slug, raw_n, url, readable, timeout_ms, smell_cfg),
+        Some(RouteExecutor::Local) => run_local(url, smell_cfg),
         None => (
             Vec::new(),
             FetchOutcome {
@@ -64,6 +66,51 @@ pub fn execute(
             },
             decision.executor.clone(),
         ),
+    }
+}
+
+fn run_local(url: &str, smell_cfg: smell::SmellConfig) -> (Vec<u8>, FetchOutcome, String) {
+    // `url` is the canonical `file:///abs/path` form produced by
+    // `route::classify_as_local`. Strip the scheme to get the disk path.
+    let path_str = url.strip_prefix("file://").unwrap_or(url);
+    let path = std::path::Path::new(path_str);
+    // Intentionally uses the fetch-stage backstop, not the walk-stage
+    // default — see `local::FETCH_STAGE_BACKSTOP_BYTES` for the
+    // separation-of-concerns rationale. The --max-file-bytes flag is
+    // already enforced by `add_local::run` at the walk level.
+    match local::read_file(path, local::FETCH_STAGE_BACKSTOP_BYTES) {
+        Ok(read) => {
+            // Route through the existing browser-shape smell test — it's
+            // the text-content judge we already trust. observed_url is
+            // the same as requested (local reads don't redirect).
+            let outcome = smell::judge_browser_with(
+                &smell::BrowserResponse {
+                    requested_url: url,
+                    observed_url: url,
+                    body_bytes: &read.body,
+                    readable_mode: false,
+                },
+                smell_cfg,
+            );
+            (read.body, outcome, "local".into())
+        }
+        Err(e) => {
+            let (reason, msg) = match &e {
+                local::LocalError::TooLarge { .. } => (RejectReason::FetchFailed, e.to_string()),
+                local::LocalError::IsDirectory => (RejectReason::FetchFailed, e.to_string()),
+                local::LocalError::NotReadable(_) => (RejectReason::FetchFailed, e.to_string()),
+                local::LocalError::Binary(_) => (RejectReason::EmptyContent, e.to_string()),
+            };
+            let outcome = FetchOutcome {
+                accepted: false,
+                observed_url: Some(url.into()),
+                observed_bytes: 0,
+                reject_reason: Some(reason),
+                warnings: vec![msg],
+                bytes: 0,
+            };
+            (Vec::new(), outcome, "local".into())
+        }
     }
 }
 

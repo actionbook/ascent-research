@@ -10,5 +10,7 @@ pub mod layout;
 pub mod log;
 pub mod md_parser;
 pub mod md_template;
+pub mod schema;
 pub mod slug;
 pub mod sources_block;
+pub mod wiki;

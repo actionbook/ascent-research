@@ -487,6 +487,7 @@ fn trust_score(exec: RouteExecutor, readable: bool, bytes: u64) -> f64 {
         RouteExecutor::Postagent => 2.0,
         RouteExecutor::Browser if readable && bytes >= 2000 => 1.5,
         RouteExecutor::Browser => 1.0,
+        RouteExecutor::Local => 2.0,
     }
 }
 

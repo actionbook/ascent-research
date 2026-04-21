@@ -83,6 +83,26 @@ pub fn render_body(md: &str, session_dir: &Path) -> Result<RenderResult, RenderE
     })
 }
 
+/// Render a wiki-page body: markdown → HTML with diagram inlining, but
+/// **without** the session.md-oriented scaffolding strip, aside
+/// extraction, or section-number styling. Wiki pages start with `# Slug`
+/// plus flowing prose — they have no `## Overview` sentinel to anchor
+/// `strip_scaffolding` on, and feeding them through `render_body` would
+/// drop their entire body.
+pub fn render_wiki_page(
+    md: &str,
+    session_dir: &Path,
+) -> Result<RenderResult, RenderError> {
+    let html = markdown_to_html(md);
+    let (html, diagrams_inlined, warnings) = inline_diagrams(&html, session_dir)?;
+    Ok(RenderResult {
+        body_html: html,
+        aside_html: String::new(),
+        diagrams_inlined,
+        warnings,
+    })
+}
+
 fn markdown_to_html(md: &str) -> String {
     let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
     let parser = Parser::new_ext(md, opts);
@@ -258,7 +278,16 @@ fn inline_diagrams(
                 }
             }
             DiagramResolve::TooLarge | DiagramResolve::Missing | DiagramResolve::NotSvg => {
-                out.push_str(full.as_str());
+                // Author referenced `diagrams/<path>.svg` but no file
+                // was written (or it was invalid / oversize). Rather
+                // than leaving a broken-image `<img>` in the HTML, emit
+                // a styled placeholder so the report stays readable and
+                // the gap is obvious.
+                let fname = src.strip_prefix("diagrams/").unwrap_or(src);
+                let label = if alt.is_empty() { fname } else { alt };
+                out.push_str(&format!(
+                    r#"<div class="diagram diagram-missing"><p class="diagram-missing-label">diagram pending</p><p class="caption">{label} — <code>{src}</code></p></div>"#
+                ));
                 warnings.push("diagram_fallback_img".into());
             }
         }
@@ -419,13 +448,32 @@ mod tests {
     }
 
     #[test]
-    fn diagram_missing_falls_back_to_img() {
+    fn render_wiki_page_keeps_body_without_overview_heading() {
+        // Regression for the wiki-render bug: `render_body` strips
+        // everything before `## Overview`, so a wiki page that starts
+        // with `# Slug` plus prose came out empty. `render_wiki_page`
+        // keeps the body intact.
+        let tmp = TempDir::new().unwrap();
+        let md = "# Scheduler\n\nThe scheduler coordinates workers.\n\nSecond paragraph.\n";
+        let r = render_wiki_page(md, tmp.path()).unwrap();
+        assert!(r.body_html.contains("<h1>Scheduler</h1>"));
+        assert!(r.body_html.contains("coordinates workers"));
+        assert!(r.body_html.contains("Second paragraph"));
+    }
+
+    #[test]
+    fn diagram_missing_renders_placeholder() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("diagrams")).unwrap();
         let md = "## Overview\nx\n\n![missing](diagrams/nope.svg)\n";
         let r = render_body(md, tmp.path()).unwrap();
         assert_eq!(r.diagrams_inlined, 0);
-        assert!(r.body_html.contains("<img src=\"diagrams/nope.svg\""));
+        // Do NOT leave a broken <img> tag — that renders a broken-
+        // image icon in the browser. Emit a styled placeholder and
+        // keep the warning so callers can surface it.
+        assert!(!r.body_html.contains("<img src=\"diagrams/nope.svg\""));
+        assert!(r.body_html.contains(r#"class="diagram diagram-missing""#));
+        assert!(r.body_html.contains("diagram pending"));
         assert!(r.warnings.iter().any(|w| w == "diagram_fallback_img"));
     }
 

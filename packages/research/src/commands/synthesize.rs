@@ -11,6 +11,7 @@ use crate::report::builder::{self, BuildError, ReportInput};
 use crate::report::markdown::{self, RenderError};
 use crate::report::sources;
 use crate::report::template::{self, Slots};
+use crate::report::wiki_render;
 use crate::session::{
     active, config,
     event::{SessionEvent, SynthesizeStage},
@@ -230,8 +231,38 @@ fn render_rich_html(
     let mut warnings = rendered.warnings.clone();
     warnings.extend(sources_section.warnings.iter().cloned());
 
+    // v3: render wiki pages between the numbered sections and Sources.
+    let wiki = wiki_render::render_wiki(slug, &session_dir).map_err(|e| match e {
+        RenderError::DiagramOutOfBounds(p) => format!(
+            "diagram_out_of_bounds (in wiki page): '{}' resolves outside session_dir/diagrams/",
+            p.display()
+        ),
+    })?;
+    warnings.extend(wiki.warnings.iter().cloned());
+    if wiki.broken_links > 0 {
+        warnings.push(format!("broken_wiki_links: {} — see coverage", wiki.broken_links));
+    }
+
+    // v3: render any SVG files that exist in `<session>/diagrams/` but
+    // aren't referenced from session.md or any wiki page. Without this
+    // pass, an SVG the agent wrote via `write_diagram` but forgot to
+    // pair with `![alt](diagrams/x.svg)` stays invisible in the report.
+    // tokio-v3 smoke caught this — `task-lifecycle.svg` (5.5 KB) was on
+    // disk but silent.
+    let orphan_diagrams_html = render_orphan_diagrams(slug, &session_dir, &md);
+
+    let combined_body = match (wiki.page_count, orphan_diagrams_html.is_empty()) {
+        (0, true) => rendered.body_html.clone(),
+        (0, false) => format!("{}\n{}", rendered.body_html, orphan_diagrams_html),
+        (_, true) => format!("{}\n{}", rendered.body_html, wiki.html),
+        (_, false) => format!(
+            "{}\n{}\n{}",
+            rendered.body_html, wiki.html, orphan_diagrams_html
+        ),
+    };
+
     let body_html = if bilingual {
-        match crate::report::bilingual::inject_zh_translations(&rendered.body_html) {
+        match crate::report::bilingual::inject_zh_translations(&combined_body) {
             Ok((augmented, note)) => {
                 if let Some(n) = note {
                     warnings.push(n);
@@ -240,11 +271,11 @@ fn render_rich_html(
             }
             Err(e) => {
                 warnings.push(format!("bilingual_skipped: {e}"));
-                rendered.body_html.clone()
+                combined_body.clone()
             }
         }
     } else {
-        rendered.body_html.clone()
+        combined_body
     };
 
     let tags_str = if tags.is_empty() {
@@ -287,6 +318,76 @@ fn should_skip_open() -> bool {
         return true;
     }
     !std::io::stdin().is_terminal()
+}
+
+/// Scan `<session>/diagrams/` for `.svg` files that aren't referenced
+/// from session.md or any wiki page, and produce an HTML block that
+/// inlines them so the agent's effort isn't lost on the rendered
+/// report. Each orphan SVG renders as a `.diagram` block with a
+/// caption derived from the filename.
+fn render_orphan_diagrams(_slug: &str, session_dir: &std::path::Path, md: &str) -> String {
+    let diagrams_dir = session_dir.join("diagrams");
+    let Ok(entries) = fs::read_dir(&diagrams_dir) else {
+        return String::new();
+    };
+    let mut on_disk: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("svg"))
+        .filter_map(|e| {
+            e.path()
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    on_disk.sort();
+    if on_disk.is_empty() {
+        return String::new();
+    }
+
+    // A filename is "referenced" if ANY of session.md / wiki pages
+    // contain `diagrams/<filename>`. Cheap substring check — the md
+    // render layer already enforces the exact `![](diagrams/…)` shape
+    // before inlining, so the false-positive risk of unrelated text is
+    // near-zero.
+    let mut all_text = md.to_string();
+    if let Ok(entries) = fs::read_dir(session_dir.join("wiki")) {
+        for e in entries.flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(body) = fs::read_to_string(e.path()) {
+                    all_text.push('\n');
+                    all_text.push_str(&body);
+                }
+            }
+        }
+    }
+    let orphans: Vec<String> = on_disk
+        .into_iter()
+        .filter(|f| !all_text.contains(&format!("diagrams/{f}")))
+        .collect();
+    if orphans.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str(r#"<section class="orphan-diagrams"><h2><span class="section-num">DIAGRAMS</span><span>Supplementary figures</span></h2>"#);
+    for fname in &orphans {
+        let path = diagrams_dir.join(fname);
+        let svg = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if svg.len() > 512 * 1024 {
+            continue;
+        }
+        let caption = fname.strip_suffix(".svg").unwrap_or(fname).replace('-', " ");
+        out.push_str(r#"<div class="diagram">"#);
+        out.push_str(&svg);
+        out.push_str(&format!("<p class=\"caption\">{caption}</p>"));
+        out.push_str("</div>");
+    }
+    out.push_str("</section>");
+    out
 }
 
 fn rel_path(p: &std::path::Path) -> String {

@@ -123,7 +123,7 @@ pub async fn run(
         // ── Build prompts from session state ──────────────────────────
         let coverage_before = coverage_json(slug, research_bin);
         let unread = collect_unread_sources(slug, 3, 2000);
-        let system = system_prompt();
+        let system = system_prompt(slug);
         let user = user_prompt(slug, &coverage_before, &unread, iter, cfg.iterations);
 
         // ── Ask provider ──────────────────────────────────────────────
@@ -330,7 +330,17 @@ fn parse_response(raw: &str) -> Result<LoopResponse, String> {
         .map_err(|e| format!("serde: {e}"))
 }
 
-fn system_prompt() -> String {
+fn system_prompt(slug: &str) -> String {
+    let base = base_system_prompt();
+    match crate::session::schema::prompt_body(slug) {
+        Some(extra) => format!(
+            "{base}\n\n── Session-specific schema guidance (from <session>/SCHEMA.md) ──\n{extra}\n"
+        ),
+        None => base,
+    }
+}
+
+fn base_system_prompt() -> String {
     r###"You drive a research CLI. Each turn respond with STRICT JSON matching
 this exact schema — no prose before or after, no code fences, nothing but
 the JSON object:
@@ -357,6 +367,9 @@ Valid action shapes (each is an object with a "type" field):
   { "type": "write_plan", "body": "Goal: …\nSources: arxiv+github+HN\nMilestones: iter 2 → fetch; iter 4 → draft" }
   { "type": "write_diagram", "path": "axis.svg", "alt": "philosophy axis",
     "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 920 380\">…</svg>" }
+  { "type": "write_wiki_page", "slug": "scheduler", "body": "---\nkind: concept\nsources: [https://...]\n---\n# Scheduler\n..." }
+  { "type": "write_wiki_page", "slug": "scheduler", "body": "...", "replace": true }
+  { "type": "append_wiki_page", "slug": "scheduler", "body": "new finding from iter 5..." }
 
 Rules:
 - "batch" requires a JSON array of URL strings named "urls" (plural). Even
@@ -375,6 +388,39 @@ Rules:
   (no slashes, no `..`). The CLI writes to `<session>/diagrams/<path>`
   but does NOT auto-insert the reference — you must also emit a
   `write_section` whose body contains `![{alt}](diagrams/{path})`.
+
+FIGURE-RICH CONTRACT (non-negotiable, v3):
+  * A report with no diagrams is INCOMPLETE. Target: ≥ 1 diagram per
+    numbered section; at minimum ≥ 1 diagram before `report_ready`.
+    The coverage blocker `diagrams_referenced < 1` enforces the floor
+    and WILL keep the loop running past "prose feels done."
+  * BIDIRECTIONAL RULE: every `![alt](diagrams/x.svg)` markdown
+    reference you write MUST be paired with a `write_diagram` action
+    (path=x.svg) in the SAME turn or an earlier turn. An orphan
+    reference renders as a broken "diagram pending" placeholder in
+    the report and blocks `report_ready` via
+    `diagrams_resolved < diagrams_referenced`.
+  * Every `write_diagram` MUST be paired with a matching
+    `write_section` whose body contains the reference — a dangling
+    SVG file on disk with no reference is also incomplete.
+  * If you find yourself writing "(see diagram above)" or "imagine a
+    flow chart here" instead of emitting a diagram, STOP and emit the
+    diagram instead. Hand-drawn SVG is part of the expected output,
+    not a bonus.
+  * If a previous turn left a dangling `diagrams/x.svg` reference,
+    the user prompt will surface it as an "⚠ UNRESOLVED DIAGRAM
+    REFERENCE" block — fix it THAT TURN, before any other action.
+  * NEVER drop a diagram reference when overwriting a section. If a
+    section body currently contains `![](diagrams/x.svg)` and you are
+    rewriting that section, EITHER keep the reference in place OR
+    relocate it to another section in the same turn. Silently
+    overwriting a section-with-reference is what creates orphan SVGs
+    that the reader can't find near the relevant prose.
+  * If a previous turn orphaned an SVG (file on disk, no reference
+    anywhere), the user prompt will surface it as an "⚠ ORPHAN
+    DIAGRAM FILE" block — use `write_section` to insert the reference
+    into a semantically relevant section, don't emit a new
+    `write_diagram` for the same path.
 
 Workflow: plan → fetch → digest + write → mark diagrams.
 - First-iteration contract: on a FRESH session with no `## Plan` section
@@ -403,6 +449,53 @@ Workflow: plan → fetch → digest + write → mark diagrams.
 - `into_section` must match the `heading` of a WriteSection you just
   wrote (or an existing section). Use this to link the source to its
   landing place in the narrative.
+
+Wiki pages — the PREFERRED ingest surface (v3).
+
+When a source maps cleanly to a durable named thing — a library
+component, a protocol, a paper, a dataset, a framework — write a wiki
+page rather than adding another numbered section. Durable entities
+accumulate across runs; numbered sections are report-shaped and get
+overwritten.
+
+Page slug rules: `[a-z0-9_-]{1,64}`. Convention:
+  - entity pages: `<name>` (e.g. `scheduler`, `openviking`)
+  - concept pages: `concept-<name>` (e.g. `concept-work-stealing`)
+  - source summaries: `source-<domain>-<hash>` (e.g. `source-arxiv-2410-04444`)
+  - comparisons: `cmp-<a>-vs-<b>`
+
+Required frontmatter for new pages:
+  ---
+  kind: concept | entity | source-summary | comparison
+  sources: [https://...]        # every URL the page draws from
+  related: [other-slug, ...]    # cross-references
+  updated: YYYY-MM-DD           # today
+  ---
+
+Workflow per source:
+  1. If the source is a named thing the session will return to → emit
+     `write_wiki_page` with a fresh slug. Include the source URL in
+     `sources:` and cite it in the body as `[...](URL)`.
+  2. If the source extends a page that already exists (see the
+     "Existing wiki pages" block in the user prompt) → emit
+     `append_wiki_page` instead of re-writing the whole body. Keep
+     appends focused: one new finding per append.
+  3. Always pair with `digest_source` so the URL leaves the unread
+     queue. The `into_section` field for wiki-backed digests should
+     be the wiki page itself, e.g. `into_section: "wiki:scheduler"`.
+  4. Cross-link aggressively. Use `[[slug]]` in prose whenever you
+     reference another wiki page. The renderer turns these into
+     anchor links; broken links surface in coverage + warnings.
+
+When NOT to use wiki: pure narrative (overview, plan, editorial
+aside), one-shot findings that don't warrant their own page, and
+transient lint comments. Those belong in numbered sections or the
+overview.
+
+Mental model shift: the numbered sections are the report's narrative
+spine. The wiki is the durable knowledge graph the narrative draws
+from. Build the wiki first, let the numbered sections cite `[[slug]]`
+pages instead of repeating their content.
 
 Source diversity. The CLI routes these kinds efficiently without a browser:
   - arxiv.org/abs/{id}                          → paper abstract (fast)
@@ -445,6 +538,71 @@ fn user_prompt(
     out.push_str(&serde_json::to_string_pretty(coverage).unwrap_or_default());
     out.push_str("\n\n");
 
+    // v3: surface UNRESOLVED diagram references at the top so the
+    // agent can't miss them. The bidirectional contract is: every
+    // `![alt](diagrams/x.svg)` reference requires a `write_diagram`
+    // with path=x.svg on disk. Without this block, Claude tends to
+    // write the markdown reference once and move on — the loop caught
+    // this on tokio-v3 live smoke.
+    let unresolved = unresolved_diagram_refs(slug);
+    if !unresolved.is_empty() {
+        out.push_str(&format!(
+            "⚠ {} UNRESOLVED DIAGRAM REFERENCE(S) — emit `write_diagram` THIS TURN for each path below. Every `![alt](diagrams/x.svg)` you wrote is currently pointing at a missing file; the report renders a 'diagram pending' placeholder in its place. This is a coverage blocker. Do NOT start new numbered sections until every referenced diagram has a matching `write_diagram` with an inline SVG body.\n\n",
+            unresolved.len()
+        ));
+        for (path, alt) in &unresolved {
+            let alt_display = if alt.is_empty() { "(no alt text)" } else { alt };
+            out.push_str(&format!("  - path: {path}    alt: {alt_display}\n"));
+        }
+        out.push_str(
+            "\nEmit shape (one per path above):\n  { \"type\": \"write_diagram\", \"path\": \"<path>\", \"alt\": \"<alt>\", \"svg\": \"<svg xmlns=\\\"http://www.w3.org/2000/svg\\\" viewBox=\\\"0 0 800 400\\\">…</svg>\" }\n\n",
+        );
+    }
+
+    // v3: orphan SVGs — already written to disk, not yet referenced
+    // anywhere in prose or wiki. The bidirectional contract says every
+    // `write_diagram` needs a paired `![](diagrams/x.svg)` in a section
+    // body so the reader sees the figure inline with its explanation.
+    // Otherwise the renderer drops it in a fallback "Supplementary
+    // figures" block at the bottom of the report, disconnected from
+    // the narrative it was drawn to explain.
+    let orphans = orphan_diagram_files(slug);
+    if !orphans.is_empty() {
+        out.push_str(&format!(
+            "⚠ {} ORPHAN DIAGRAM FILE(S) — these SVG files are on disk but NOT referenced from session.md or any wiki page. Emit `write_section` THIS TURN to insert `![alt](diagrams/<file>)` into a relevant numbered section (or edit an existing section). Do NOT emit a new `write_diagram` for these paths — they already exist; just add the markdown reference.\n\n",
+            orphans.len()
+        ));
+        for fname in &orphans {
+            out.push_str(&format!("  - diagrams/{fname}\n"));
+        }
+        out.push('\n');
+    }
+
+    // v3: list existing wiki pages so the agent chooses `append_wiki_page`
+    // when a relevant page already exists rather than creating a
+    // near-duplicate. Only shows page slugs + the frontmatter kind —
+    // full page bodies would bloat the prompt. Agent can `wiki show`
+    // mentally by referring to the slug and (if needed) emitting
+    // `append_wiki_page` with additive content.
+    let existing_pages = crate::session::wiki::list_pages(slug);
+    if !existing_pages.is_empty() {
+        out.push_str(&format!(
+            "existing wiki pages ({}) — prefer `append_wiki_page` over creating a near-duplicate:\n",
+            existing_pages.len()
+        ));
+        for page_slug in &existing_pages {
+            let kind_hint = crate::session::wiki::read_page(slug, page_slug)
+                .ok()
+                .map(|body| {
+                    let (fm, _rest) = crate::session::wiki::split_frontmatter(&body);
+                    fm.kind.unwrap_or_else(|| "—".to_string())
+                })
+                .unwrap_or_else(|| "—".to_string());
+            out.push_str(&format!("  - {page_slug}  [{kind_hint}]\n"));
+        }
+        out.push('\n');
+    }
+
     if !unread.is_empty() {
         out.push_str(&format!(
             "⚠ {} unread accepted source(s) below — DIGEST ONE NOW. Do NOT emit an `add` or `batch` action until the unread queue is empty; the sources are already on disk and fetching more is wasted work. The raw snippet may look thin but it's real HTML/JSON — grep it for titles, links, headings, and github references before concluding it's unusable. You have no authority to skip a URL.\n\n",
@@ -469,6 +627,62 @@ fn user_prompt(
 
     out.push_str("Decide the next actions.\n");
     out
+}
+
+/// Read `session.md` and return `(path, alt)` pairs for every
+/// `![alt](diagrams/x.svg)` reference whose file doesn't yet exist at
+/// `<session>/diagrams/<path>`. Used by the user prompt to nag the
+/// agent about unresolved diagrams until `write_diagram` is emitted.
+fn unresolved_diagram_refs(slug: &str) -> Vec<(String, String)> {
+    let md = std::fs::read_to_string(layout::session_md(slug)).unwrap_or_default();
+    crate::commands::coverage::diagram_refs_with_alt(&md)
+        .into_iter()
+        .filter(|(path, _alt)| !crate::commands::coverage::diagram_path_resolved(slug, path))
+        .collect()
+}
+
+/// Counterpart to `unresolved_diagram_refs`: SVG files that exist in
+/// `<session>/diagrams/` but are never referenced from session.md OR
+/// any wiki page body. Used by the user prompt to nag the agent to
+/// add a `![](...)` reference (placed in a relevant section) instead
+/// of leaving the SVG stranded as an "orphan" in the renderer's
+/// fallback block. Synthesize still renders orphans as a safety net,
+/// but the goal is that this list stays empty in normal operation.
+fn orphan_diagram_files(slug: &str) -> Vec<String> {
+    let diagrams_dir = layout::session_dir(slug).join("diagrams");
+    let Ok(entries) = std::fs::read_dir(&diagrams_dir) else {
+        return Vec::new();
+    };
+    let mut on_disk: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("svg"))
+        .filter_map(|e| {
+            e.path()
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    on_disk.sort();
+    if on_disk.is_empty() {
+        return Vec::new();
+    }
+    let mut corpus = std::fs::read_to_string(layout::session_md(slug)).unwrap_or_default();
+    let wiki_dir = layout::session_dir(slug).join("wiki");
+    if let Ok(entries) = std::fs::read_dir(&wiki_dir) {
+        for e in entries.flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(body) = std::fs::read_to_string(e.path()) {
+                    corpus.push('\n');
+                    corpus.push_str(&body);
+                }
+            }
+        }
+    }
+    on_disk
+        .into_iter()
+        .filter(|fname| !corpus.contains(&format!("diagrams/{fname}")))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -556,7 +770,12 @@ fn coverage_json(slug: &str, research_bin: &Path) -> Value {
 
 fn coverage_signature(coverage: &Value) -> String {
     // Deterministic fingerprint of the numeric fields only — prose changes
-    // don't count toward divergence.
+    // don't count toward divergence. v3: `wiki_pages` alone isn't enough —
+    // `append_wiki_page` adds bytes without moving the page count, so
+    // three append-only turns fingerprinted identically and false-
+    // positive diverged on tokio-v3. `wiki_total_bytes` fixes that while
+    // still catching real divergence (a loop that's emitting actions
+    // without touching any tracked field).
     let keys = [
         "overview_chars",
         "numbered_sections_count",
@@ -568,6 +787,9 @@ fn coverage_signature(coverage: &Value) -> String {
         "sources_referenced_in_body",
         "sources_unused",
         "sources_hallucinated",
+        "wiki_pages",
+        "wiki_pages_with_frontmatter",
+        "wiki_total_bytes",
     ];
     keys.iter()
         .map(|k| format!("{k}={}", coverage.get(k).unwrap_or(&Value::Null)))
@@ -604,6 +826,74 @@ fn dispatch_action(
         Action::WriteDiagram { path, alt, svg } => {
             write_diagram(slug, iteration, path, alt, svg)
         }
+        Action::WriteWikiPage { slug: page_slug, body, replace } => {
+            write_wiki_page(slug, iteration, page_slug, body, *replace)
+        }
+        Action::AppendWikiPage { slug: page_slug, body } => {
+            append_wiki_page(slug, iteration, page_slug, body)
+        }
+    }
+}
+
+fn write_wiki_page(
+    session_slug: &str,
+    iteration: u32,
+    page_slug: &str,
+    body: &str,
+    replace: bool,
+) -> Result<(), String> {
+    use crate::session::wiki;
+    let result = if replace {
+        wiki::replace_page(session_slug, page_slug, body).map(|_| "replace")
+    } else {
+        wiki::create_page(session_slug, page_slug, body).map(|_| "create")
+    };
+    match result {
+        Ok(mode) => {
+            let _ = log::append(
+                session_slug,
+                &SessionEvent::WikiPageWritten {
+                    timestamp: Utc::now(),
+                    iteration,
+                    slug: page_slug.to_string(),
+                    mode: mode.to_string(),
+                    body_chars: body.chars().count() as u32,
+                    note: None,
+                },
+            );
+            Ok(())
+        }
+        Err(wiki::WikiError::AlreadyExists(_)) => Err(format!(
+            "wiki_page_exists: '{page_slug}' exists — set replace:true or use append_wiki_page"
+        )),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn append_wiki_page(
+    session_slug: &str,
+    iteration: u32,
+    page_slug: &str,
+    body: &str,
+) -> Result<(), String> {
+    use crate::session::wiki;
+    let stamp = Utc::now().format("%Y-%m-%d").to_string();
+    match wiki::append_page(session_slug, page_slug, body, &stamp) {
+        Ok(_) => {
+            let _ = log::append(
+                session_slug,
+                &SessionEvent::WikiPageWritten {
+                    timestamp: Utc::now(),
+                    iteration,
+                    slug: page_slug.to_string(),
+                    mode: "append".to_string(),
+                    body_chars: body.chars().count() as u32,
+                    note: None,
+                },
+            );
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -691,8 +981,70 @@ fn run_batch(
 fn write_section(slug: &str, heading: &str, body: &str) -> Result<(), String> {
     let path = layout::session_md(slug);
     let md = std::fs::read_to_string(&path).map_err(|e| format!("read session.md: {e}"))?;
-    let new_md = replace_or_insert_section(&md, heading, body);
+    // v3: preserve any `![alt](diagrams/x.svg)` references the existing
+    // section body holds. Without this, an overwrite that happens to
+    // omit a reference silently orphans the SVG file and the reader
+    // loses the figure next to its explanation. Preserved refs are
+    // appended as a trailing paragraph — the agent can move them in a
+    // follow-up turn if it wants them mid-prose, but we never silently
+    // drop.
+    let body = preserve_diagram_refs(&md, heading, body);
+    let new_md = replace_or_insert_section(&md, heading, &body);
     std::fs::write(&path, new_md).map_err(|e| format!("write session.md: {e}"))
+}
+
+/// Inspect the existing body for `heading` in `md` and — if any
+/// `![alt](diagrams/x.svg)` references are present there but not in
+/// `new_body` — append them to the new body. Idempotent: if all old
+/// refs are already in the new body, returns `new_body` untouched.
+fn preserve_diagram_refs(md: &str, heading: &str, new_body: &str) -> String {
+    let Some(old_body) = extract_section_body(md, heading) else {
+        return new_body.to_string();
+    };
+    let old_refs = crate::commands::coverage::diagram_refs_with_alt(&old_body);
+    if old_refs.is_empty() {
+        return new_body.to_string();
+    }
+    let mut out = new_body.to_string();
+    let mut appended: Vec<String> = Vec::new();
+    for (path, alt) in old_refs {
+        let marker = format!("diagrams/{path}");
+        if out.contains(&marker) {
+            continue;
+        }
+        let line = if alt.is_empty() {
+            format!("![](diagrams/{path})")
+        } else {
+            format!("![{alt}](diagrams/{path})")
+        };
+        appended.push(line);
+    }
+    if !appended.is_empty() {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push('\n');
+        for line in appended {
+            out.push_str(&line);
+            out.push_str("\n\n");
+        }
+    }
+    out
+}
+
+/// Return the body of `heading` in `md` (between this heading's
+/// trailing newline and the next `## ` heading or EOF). Returns None
+/// if the heading isn't present.
+fn extract_section_body(md: &str, heading: &str) -> Option<String> {
+    let needle = format!("{heading}\n");
+    let start = md.find(&needle)?;
+    let body_start = start + needle.len();
+    let tail = &md[body_start..];
+    let body_end = tail
+        .find("\n## ")
+        .map(|i| body_start + i + 1)
+        .unwrap_or(md.len());
+    Some(md[body_start..body_end].to_string())
 }
 
 /// v2: write (or replace) the `## Plan` block. If a plan already exists,
@@ -1022,6 +1374,31 @@ mod tests {
     }
 
     #[test]
+    fn coverage_signature_tracks_wiki_total_bytes_for_append_progress() {
+        // v3 second regression: wiki_pages alone missed `append_wiki_page`
+        // progress (page count unchanged, body grows). tokio-v3 loop #5
+        // caught this — 3 append turns in a row false-positive diverged.
+        // wiki_total_bytes fixes it.
+        let a = json!({"wiki_pages": 14, "wiki_total_bytes": 40000});
+        let b = json!({"wiki_pages": 14, "wiki_total_bytes": 42500});
+        assert_ne!(coverage_signature(&a), coverage_signature(&b));
+    }
+
+    #[test]
+    fn coverage_signature_tracks_wiki_pages_so_wiki_writes_count_as_progress() {
+        // v3 regression guard: before wiki_pages was part of the
+        // signature, a session that produced 3 wiki pages in 3 turns
+        // (with the rest of coverage unchanged) fingerprinted
+        // identically on each turn and the divergence detector fired
+        // a false-positive "diverged" termination. The smoke run on
+        // tokio-v3 caught this. Adding wiki_pages means writing pages
+        // is a legitimate progress signal.
+        let a = json!({"wiki_pages": 1, "overview_chars": 0, "numbered_sections_count": 0});
+        let b = json!({"wiki_pages": 2, "overview_chars": 0, "numbered_sections_count": 0});
+        assert_ne!(coverage_signature(&a), coverage_signature(&b));
+    }
+
+    #[test]
     fn replace_or_insert_section_replaces_existing() {
         let md = "# X\n\n## Overview\nold body\n\n## 01 · WHY\nbody\n";
         let out = replace_or_insert_section(md, "## Overview", "new body");
@@ -1042,5 +1419,51 @@ mod tests {
     fn termination_reason_str() {
         assert_eq!(TerminationReason::ReportReady.as_str(), "report_ready");
         assert_eq!(TerminationReason::Diverged.as_str(), "diverged");
+    }
+
+    #[test]
+    fn preserve_diagram_refs_keeps_existing_figure_when_overwrite_omits_it() {
+        // tokio-v3 smoke regression: Claude rewrote `## 01 · WHY`
+        // body, dropping `![control flow](diagrams/scheduler-flow.svg)`
+        // in favor of `![lifecycle](diagrams/task-lifecycle.svg)`.
+        // Old SVG became an orphan. Fix preserves missing refs by
+        // appending them to the new body.
+        let md = r"# X
+
+## 01 · WHY
+Prose explaining the scheduler.
+
+![control flow](diagrams/scheduler-flow.svg)
+
+More prose.
+
+## 02 · HOW
+body
+";
+        let new_body = "Rewritten prose, only the new figure.\n\n![lifecycle](diagrams/task-lifecycle.svg)\n";
+        let out = preserve_diagram_refs(md, "## 01 · WHY", new_body);
+        assert!(out.contains("Rewritten prose"));
+        assert!(out.contains("task-lifecycle.svg"));
+        // The previously-referenced SVG must NOT be silently dropped:
+        assert!(
+            out.contains("scheduler-flow.svg"),
+            "preserve_diagram_refs must retain the original figure, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn preserve_diagram_refs_is_idempotent_when_refs_match() {
+        let md = "## 01 · WHY\n![a](diagrams/x.svg)\n\n## 02 · NEXT\n";
+        let new_body = "New prose\n\n![a](diagrams/x.svg)\n";
+        let out = preserve_diagram_refs(md, "## 01 · WHY", new_body);
+        // Exactly one reference should survive — no duplication.
+        assert_eq!(out.matches("diagrams/x.svg").count(), 1);
+    }
+
+    #[test]
+    fn preserve_diagram_refs_noop_when_heading_absent() {
+        let md = "## Overview\nbody\n";
+        let out = preserve_diagram_refs(md, "## 01 · NEW", "fresh");
+        assert_eq!(out, "fresh");
     }
 }

@@ -7,6 +7,16 @@ client) and [`actionbook browser`](https://github.com/actionbook/actionbook)
 sources into editorial HTML reports — without ever asking an LLM
 to "just summarize this for me."
 
+**v0.2 (local-wiki)** adds a karpathy-style per-session knowledge
+layer on top of the original narrative layer: local file ingest
+(`add-local`), persistent wiki pages (`write_wiki_page` /
+`append_wiki_page`), user-editable session guidance (`SCHEMA.md`),
+retrieval-then-synthesis queries (`wiki query`), and a structural
+health check (`wiki lint`). See the
+[v3 spec](specs/research-local-wiki-v3.spec.md) for the three-layer
+model and the [bundled skill](skills/research-local-wiki/SKILL.md)
+for an agent-facing usage guide.
+
 ## What problem this solves
 
 Research agents (Claude Code, Codex, custom) repeatedly hit the same
@@ -32,11 +42,18 @@ fetches, and optionally `actionbook` ≥ 1.1 for browser-fallback on
 domains without a preset rule.
 
 ```bash
-cargo install --path packages/research
-# or from a clone:
-git clone https://github.com/ZhangHanDong/research-rs
-cd research-rs
+# Minimal — no autonomous loop, no LLM calls
 cargo build -p research --release
+
+# Add the autonomous loop (fake provider only, no real LLM)
+cargo build -p research --release --features autoresearch
+
+# Full — what live sessions need (loop + Claude)
+cargo build -p research --release --features "autoresearch provider-claude"
+
+# Optional alternative LLM
+cargo build -p research --release --features "autoresearch provider-codex"
+
 export PATH="$PWD/target/release:$PATH"
 ```
 
@@ -46,7 +63,7 @@ Verify:
 research --help
 ```
 
-## Quick tour
+## Quick tour — online sources (v1)
 
 ```bash
 # 1. Start a session
@@ -70,6 +87,34 @@ research batch \
 research report tokio-arch --format rich-html --open
 ```
 
+## Quick tour — local codebase (v3)
+
+```bash
+# 1. Session seeds SCHEMA.md with a starter template
+research new "tokio internals 2026" --slug tokio-v3 --preset tech
+
+# 2. Edit the per-session schema (goals / what to emphasize)
+research schema edit
+
+# 3. Ingest a source tree, include/exclude via globs, size-capped
+research add-local ~/tokio/tokio/src/runtime/scheduler \
+  --glob '**/*.rs' --glob '!**/tests/**' \
+  --max-file-bytes 65536 --max-total-bytes 524288
+
+# 4. Run the autonomous loop — writes wiki pages + draws SVG figures
+research loop tokio-v3 --provider claude --iterations 12
+
+# 5. Ask questions over the accumulated wiki
+research wiki query "how does the scheduler balance work across threads?" \
+  --save-as scheduler-balancing
+
+# 6. Health-check the wiki (orphans / broken links / stale pages)
+research wiki lint --slug tokio-v3
+
+# 7. Render the report (inline SVGs, wiki TOC, bilingual optional)
+research synthesize tokio-v3 --open
+```
+
 ## Core concepts
 
 ### Session (one per research topic)
@@ -78,12 +123,14 @@ Lives at `~/.actionbook/research/<slug>/`:
 
 | File | Purpose |
 |------|---------|
-| `session.md` | Canonical narrative — human + agent edit this. |
-| `session.jsonl` | Append-only event log. Sources, attempts, synthesize runs. Authoritative. |
+| `session.md` | Canonical narrative — numbered sections, overview, aside. Report spine. |
+| `session.jsonl` | Append-only event log. Sources, attempts, loop steps, wiki writes. Authoritative. |
 | `session.toml` | Metadata (slug, topic, preset, tags, parent). |
+| `SCHEMA.md` | **v3** — User-editable session guidance (goals / emphasis / house style). Loop re-reads each turn. |
 | `raw/` | Fetched content, one file per accepted source. |
-| `diagrams/` | Hand-authored SVGs referenced from `session.md`. |
-| `report-rich.html` | Rendered output. |
+| `diagrams/` | Hand-authored SVGs referenced from `session.md` or wiki pages. |
+| `wiki/` | **v3** — Per-entity / per-concept markdown pages with frontmatter + `[[slug]]` cross-links. Persistent knowledge layer. |
+| `report.html` | Rendered output: numbered sections + inline SVG + wiki TOC + sources. |
 
 Sessions are **completely isolated** — no cross-topic leak. The only
 global state is `~/.actionbook/research/.active` (current slug
@@ -140,20 +187,44 @@ trend snapshot → quadrant; literature survey → timeline; etc.).
 ## CLI reference
 
 ```
-research new <topic>     --slug <s> [--tag <t>...] [--from <parent>]
-research add <url>       [--slug <s>] [--readable] [--timeout <ms>]
-research batch <url>...  [--slug <s>] [--concurrency N] [--timeout <ms>]
-research list            [--tag <t>] [--tree]
+# Session lifecycle
+research new <topic>       --slug <s> [--tag <t>...] [--from <parent>]
+research list              [--tag <t>] [--tree]
 research show <slug>
-research status          [<slug>]
+research status            [<slug>]
 research resume <slug>
-research sources         [<slug>] [--rejected]
-research route <url>     [--rules <file>] [--preset <name>] [--prefer browser]
-research synthesize      [<slug>] [--no-render] [--open]
-research report <slug>   --format rich-html [--open | --no-open]
-research series <tag>    [--open]
-research close           [<slug>]
-research rm <slug>       [--force]
+research close             [<slug>]
+research rm <slug>         [--force]
+
+# Ingest (v1)
+research add <url>         [--slug <s>] [--readable] [--timeout <ms>]
+research batch <url>...    [--slug <s>] [--concurrency N] [--timeout <ms>]
+research sources           [<slug>] [--rejected]
+research route <url>       [--rules <file>] [--preset <name>] [--prefer browser]
+
+# Ingest (v3 — local)
+research add-local <path>  [--slug <s>] [--glob '...'] [--max-file-bytes N] [--max-total-bytes N]
+
+# Autonomous loop (feature: autoresearch)
+research loop [<slug>]     --provider {fake|claude|codex} [--iterations N] [--max-actions M] [--dry-run]
+
+# Session schema (v3)
+research schema show       [--slug <s>]
+research schema edit       [--slug <s>]             # opens $EDITOR
+
+# Wiki (v3)
+research wiki list         [--slug <s>]
+research wiki show <page>  [--slug <s>]
+research wiki rm <page>    [--slug <s>] [--force]
+research wiki query "<question>"  [--slug <s>] [--save-as <slug>] [--format prose|comparison|table] [--provider fake|claude|codex]
+research wiki lint         [--slug <s>] [--stale-days N]
+
+# Output
+research synthesize        [<slug>] [--no-render] [--open] [--bilingual]
+research report <slug>     --format rich-html|brief-md [--open | --no-open] [--stdout]
+research series <tag>      [--open]
+research coverage          [<slug>]
+research diff              [<slug>] [--unused-only]
 ```
 
 Global flags: `--json` (machine-readable envelope), `-v` / `--verbose`
@@ -218,18 +289,41 @@ retry strategy; never parse prose.
 ## Testing
 
 ```bash
-cargo test -p research        # 107 unit + 62 integration, no network
+# Core tests — no autoresearch, no LLM
+cargo test -p research
+
+# Full suite — 254 unit + 326 integration as of v0.2, still no network
+cargo test -p research --features autoresearch
 ```
 
 Integration tests spawn the compiled binary and exercise the full
 envelope contract. Network-touching tests are avoided — fetches are
 simulated by writing synthetic jsonl events into the temp session.
+Autoresearch tests use a `FakeProvider` that replays scripted JSON
+turns, so even the loop suite never hits a real LLM.
+
+## Agent integration
+
+`skills/research-local-wiki/SKILL.md` is a bundled Claude Code /
+Codex skill describing the full v3 workflow (session lifecycle +
+SCHEMA.md + add-local + loop + wiki query / lint / render) with six
+scenario playbooks, an error-code triage table, and build-target
+matrix. Symlink or copy into `~/.claude/skills/` to expose it on
+your global skill path:
+
+```bash
+ln -s "$PWD/skills/research-local-wiki" ~/.claude/skills/research-local-wiki
+```
 
 ## Tracing the work
 
-- [specs/](specs/) — one task spec per shipped feature
+- [specs/](specs/) — one task spec per shipped feature, each with a
+  post-implementation reconciliation section covering bugs
+  discovered during live smoke
 - [packages/research/templates/](packages/research/templates/) —
   template assets + agent-facing authoring guide + diagram primitives
+- [skills/research-local-wiki/](skills/research-local-wiki/) —
+  bundled agent skill for the v3 workflow
 - [DESIGN.md](DESIGN.md), [PLAN.md](PLAN.md),
   [RETROSPECTIVE.md](RETROSPECTIVE.md) — higher-level context from
   early exploration

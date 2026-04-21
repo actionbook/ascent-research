@@ -111,6 +111,10 @@ pub enum SegmentPattern {
 pub enum Executor {
     Postagent,
     Browser,
+    /// v3: in-process local file / directory read. No subprocess spawn;
+    /// the `fetch::local` module reads the path directly. Gated behind
+    /// `file://` URL or absolute/relative path classification.
+    Local,
 }
 
 impl Executor {
@@ -118,6 +122,7 @@ impl Executor {
         match s {
             "postagent" => Some(Executor::Postagent),
             "browser" => Some(Executor::Browser),
+            "local" => Some(Executor::Local),
             _ => None,
         }
     }
@@ -125,6 +130,7 @@ impl Executor {
         match self {
             Executor::Postagent => "postagent",
             Executor::Browser => "browser",
+            Executor::Local => "local",
         }
     }
 }
@@ -478,6 +484,13 @@ pub fn classify(
     url: &str,
     prefer_browser: bool,
 ) -> Result<Classification, String> {
+    // v3: local paths / file:// URLs short-circuit the HTTP classification.
+    // These are handled in-process by `fetch::local`, never routed through
+    // postagent or a browser subprocess.
+    if let Some(route) = classify_as_local(url) {
+        return Ok(Classification::Matched(route));
+    }
+
     let parsed = ParsedUrl::parse(url).ok_or_else(|| format!("cannot parse '{url}' as http(s) URL"))?;
 
     if prefer_browser {
@@ -514,6 +527,66 @@ pub fn classify(
         url: url.into(),
     };
     Ok(Classification::Fallback(route))
+}
+
+/// Try to classify `input` as a local file/dir path or `file://` URL.
+/// Returns None if the input isn't locally addressable (let HTTP path
+/// handle it).
+///
+/// Accepts:
+/// - `file:///abs/path` or `file://host/abs/path` (host ignored)
+/// - absolute unix path `/abs/path`
+/// - relative path `./x`, `../x`
+/// - home-relative `~/x` (expanded)
+///
+/// `kind`: `local-file` (file) or `local-tree` (directory). If the path
+/// doesn't exist on disk we still return Some with `local-file` so the
+/// caller's error path produces a clean SourceRejected rather than
+/// "cannot parse as http URL".
+fn classify_as_local(input: &str) -> Option<Route> {
+    let abs = normalize_local_path(input)?;
+    let kind = match std::fs::metadata(&abs) {
+        Ok(m) if m.is_dir() => "local-tree",
+        // File, or missing (let the fetch layer emit fetch_failed)
+        _ => "local-file",
+    };
+    // Re-encode as file:// URL so downstream events carry a consistent
+    // addressing scheme; observed_url in jsonl will match this.
+    let canonical = format!("file://{}", abs.to_string_lossy());
+    Some(Route {
+        executor: Executor::Local,
+        kind: kind.to_string(),
+        command_template: format!("<local read {}>", abs.display()),
+        url: canonical,
+    })
+}
+
+fn normalize_local_path(input: &str) -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    // file:// URL
+    let raw = if let Some(rest) = input.strip_prefix("file://") {
+        // Strip optional host segment: file://host/path → /path.
+        // Empty host (file:///abs) leaves leading / intact.
+        match rest.find('/') {
+            Some(0) => rest.to_string(),
+            Some(i) => rest[i..].to_string(),
+            None => return None,
+        }
+    } else if input.starts_with('/') || input.starts_with("./") || input.starts_with("../")
+    {
+        input.to_string()
+    } else if let Some(rest) = input.strip_prefix("~/") {
+        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
+        format!("{home}/{rest}")
+    } else {
+        return None;
+    };
+    let path = PathBuf::from(raw);
+    // Only accept clearly-local paths. Leave URL-encoded weirdness alone.
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    Some(path)
 }
 
 fn match_rule(rule: &CompiledRule, parsed: &ParsedUrl) -> Option<HashMap<String, String>> {
@@ -880,5 +953,85 @@ template = "fb"
         assert!(tpl.contains("fetch \"https://example.com/p\""));
         assert!(tpl.contains("host=example.com"));
         assert!(tpl.contains("path=/p"));
+    }
+
+    // v3: local classification tests
+
+    fn test_preset_for_local() -> CompiledPreset {
+        // Any valid preset works — local classification short-circuits
+        // before the preset is consulted. Use the minimum schema.
+        let p = r#"
+name = "test-local"
+
+[[rules]]
+kind = "x"
+host = "example.com"
+path = { exact = "/x" }
+executor = "postagent"
+template = "x"
+
+[fallback]
+kind = "fb"
+executor = "browser"
+template = "fb"
+"#;
+        parse_and_compile(p, None).unwrap()
+    }
+
+    #[test]
+    fn classifies_file_scheme_as_local_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let url = format!("file://{}", tmp.path().display());
+        let c = classify(&test_preset_for_local(), &url, false).unwrap();
+        let route = c.route();
+        assert_eq!(route.executor, Executor::Local);
+        assert_eq!(route.kind, "local-file");
+        assert!(route.url.starts_with("file://"));
+    }
+
+    #[test]
+    fn classifies_file_scheme_pointing_at_dir_as_local_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let url = format!("file://{}", tmp.path().display());
+        let c = classify(&test_preset_for_local(), &url, false).unwrap();
+        assert_eq!(c.route().kind, "local-tree");
+    }
+
+    #[test]
+    fn classifies_absolute_unix_path_as_local() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let c = classify(
+            &test_preset_for_local(),
+            tmp.path().to_str().unwrap(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(c.route().executor, Executor::Local);
+    }
+
+    #[test]
+    fn classifies_missing_path_as_local_file_anyway() {
+        // A path we'd expect never to exist should still route as local
+        // so the fetch layer can return a clean fetch_failed.
+        let c = classify(
+            &test_preset_for_local(),
+            "/nonexistent/path/xyz-123-research-test",
+            false,
+        )
+        .unwrap();
+        assert_eq!(c.route().executor, Executor::Local);
+        assert_eq!(c.route().kind, "local-file");
+    }
+
+    #[test]
+    fn does_not_misclassify_https_as_local() {
+        let c = classify(
+            &test_preset_for_local(),
+            "https://example.com/x",
+            false,
+        )
+        .unwrap();
+        // Should fall through to the rule / fallback, not Local.
+        assert_ne!(c.route().executor, Executor::Local);
     }
 }

@@ -15,7 +15,7 @@ use crate::output::Envelope;
 use crate::session::{
     active, config,
     event::{read_events, SessionEvent},
-    layout, md_parser,
+    layout, md_parser, wiki,
 };
 
 const CMD: &str = "research coverage";
@@ -77,9 +77,18 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             _ => None,
         })
         .collect();
-    let body_links: HashSet<String> = md_parser::extract_http_links(&md, true)
+    let mut body_links: HashSet<String> = md_parser::extract_http_links(&md, true)
         .into_iter()
         .collect();
+
+    // v3: wiki pages are a second "body" surface. URLs cited in their
+    // frontmatter `sources:` list or in the prose count as body
+    // references, so an agent that digests a URL entirely through a
+    // wiki page doesn't leave it as "unused".
+    let wiki_stats = collect_wiki_stats(&slug);
+    for url in &wiki_stats.source_urls {
+        body_links.insert(url.clone());
+    }
 
     let sources_accepted = accepted.len();
     let source_kind_diversity = accepted_kinds.len();
@@ -155,11 +164,92 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             "sources_referenced_in_body": sources_referenced_in_body,
             "sources_unused": sources_unused,
             "sources_hallucinated": sources_hallucinated,
+            "wiki_pages": wiki_stats.pages,
+            "wiki_pages_with_frontmatter": wiki_stats.pages_with_frontmatter,
+            "wiki_total_bytes": wiki_stats.total_bytes,
+            "broken_wiki_links": wiki_stats.broken_links,
             "report_ready": report_ready,
             "report_ready_blockers": blockers,
         }),
     )
     .with_context(json!({ "session": slug }))
+}
+
+// ── Wiki stats ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default)]
+struct WikiStats {
+    pages: usize,
+    pages_with_frontmatter: usize,
+    /// `[[slug]]` in a wiki page pointing at a non-existent page.
+    broken_links: usize,
+    /// Sum of body sizes across all wiki pages in bytes. Exposed so the
+    /// autoresearch divergence detector can tell "3 append-only turns"
+    /// (bytes grow, page count stays) apart from "no progress" —
+    /// without this, a session that spent 3 turns appending to existing
+    /// pages false-positive diverged.
+    total_bytes: usize,
+    /// Union of every `sources: [...]` URL listed in any page's
+    /// frontmatter — merged into body_links so a wiki-only digest
+    /// removes that URL from sources_unused.
+    source_urls: HashSet<String>,
+}
+
+fn collect_wiki_stats(slug: &str) -> WikiStats {
+    let page_slugs: Vec<String> = wiki::list_pages(slug);
+    let mut stats = WikiStats {
+        pages: page_slugs.len(),
+        ..Default::default()
+    };
+    if page_slugs.is_empty() {
+        return stats;
+    }
+    let page_set: HashSet<&str> = page_slugs.iter().map(String::as_str).collect();
+    let link_re = wiki_link_re();
+    for page in &page_slugs {
+        let Ok(body) = wiki::read_page(slug, page) else {
+            continue;
+        };
+        stats.total_bytes += body.len();
+        let (fm, rest) = wiki::split_frontmatter(&body);
+        let has_fm = fm.kind.is_some()
+            || !fm.sources.is_empty()
+            || !fm.related.is_empty()
+            || fm.updated.is_some();
+        if has_fm {
+            stats.pages_with_frontmatter += 1;
+        }
+        for url in &fm.sources {
+            // Accept any scheme the pipeline actually routes: http(s) for
+            // online fetches, file:// for add-local ingest. Without
+            // file://, `sources_unused` stays stuck at N even though
+            // every local file has a wiki page citing it — which
+            // manifested on tokio-v3 as `sources_unused = 41` after 12
+            // iters of digesting. Plain `wiki:<slug>` / `url:` prefixes
+            // are internal shorthand, not accepted-source URLs, so we
+            // deliberately don't match them here.
+            if url.starts_with("http://")
+                || url.starts_with("https://")
+                || url.starts_with("file://")
+            {
+                stats.source_urls.insert(url.clone());
+            }
+        }
+        for caps in link_re.captures_iter(rest) {
+            let Some(target) = caps.get(1).map(|m| m.as_str()) else {
+                continue;
+            };
+            if !page_set.contains(target) {
+                stats.broken_links += 1;
+            }
+        }
+    }
+    stats
+}
+
+fn wiki_link_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\[\[([a-z0-9_-]+)\]\]").expect("wiki link regex"))
 }
 
 fn overview_char_count(md: &str) -> usize {
@@ -212,26 +302,45 @@ fn count_diagrams_resolved(slug: &str, md: &str) -> usize {
 /// Collect every `![alt](diagrams/foo.svg)` relative path. Only matches
 /// the exact `diagrams/…` prefix and `.svg` extension.
 fn diagram_ref_paths(md: &str) -> Vec<String> {
+    diagram_refs_with_alt(md).into_iter().map(|(p, _)| p).collect()
+}
+
+/// Same but also surfaces the `![alt](diagrams/x.svg)` alt text so the
+/// loop's user-prompt can tell the agent what caption to restore.
+/// Exposed at crate visibility so `autoresearch::executor` can print
+/// unresolved refs without duplicating the regex. Only consumed under
+/// the `autoresearch` feature; default builds see it as dead code.
+#[cfg_attr(not(feature = "autoresearch"), allow(dead_code))]
+pub(crate) fn diagram_refs_with_alt(md: &str) -> Vec<(String, String)> {
     let re = diagram_re();
     re.captures_iter(md)
         .filter_map(|c| {
-            let rel = c.get(1)?.as_str();
-            // Strip the `diagrams/` prefix so we can join against diagrams_root.
-            rel.strip_prefix("diagrams/").map(str::to_string)
+            let alt = c.get(1).map(|m| m.as_str().to_string()).unwrap_or_default();
+            let rel = c.get(2)?.as_str();
+            rel.strip_prefix("diagrams/").map(|p| (p.to_string(), alt))
         })
         .collect()
+}
+
+/// True iff `<session>/diagrams/<rel>` exists on disk. Only used by
+/// the autoresearch loop's user prompt to flag unresolved diagram
+/// references; default builds don't see any call site.
+#[cfg_attr(not(feature = "autoresearch"), allow(dead_code))]
+pub(crate) fn diagram_path_resolved(slug: &str, rel: &str) -> bool {
+    layout::session_dir(slug).join("diagrams").join(rel).is_file()
 }
 
 fn diagram_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        // Match `![...](diagrams/foo.svg)` variants:
+        // Match `![alt](diagrams/foo.svg)` variants:
         //   - case-insensitive `.svg` / `.SVG`
         //   - optional markdown title: `![t](diagrams/x.svg "caption")`
+        // Capture group 1 = alt, group 2 = `diagrams/<path>.svg`.
         // Mirrors what the markdown renderer already accepts — the two
         // layers must agree or `diagrams_referenced` drifts below what
         // the rendered report actually shows.
-        Regex::new(r#"(?i)!\[[^\]]*\]\((diagrams/[^)\s]+\.svg)(?:\s+"[^"]*")?\)"#)
+        Regex::new(r#"(?i)!\[([^\]]*)\]\((diagrams/[^)\s]+\.svg)(?:\s+"[^"]*")?\)"#)
             .expect("diagram regex")
     })
 }
@@ -285,5 +394,45 @@ mod tests {
     fn diagram_re_accepts_optional_title_attribute() {
         let md = r#"![fig](diagrams/axis.svg "a caption")"#;
         assert_eq!(diagram_ref_paths(md), vec!["axis.svg"]);
+    }
+
+    // wiki link regex
+    #[test]
+    fn wiki_link_re_extracts_slugs() {
+        let re = wiki_link_re();
+        let text = "See [[scheduler]] and [[task-system]] for details.";
+        let found: Vec<&str> = re
+            .captures_iter(text)
+            .filter_map(|c| c.get(1).map(|m| m.as_str()))
+            .collect();
+        assert_eq!(found, vec!["scheduler", "task-system"]);
+    }
+
+    #[test]
+    fn wiki_link_re_rejects_invalid_slug_chars() {
+        let re = wiki_link_re();
+        // Uppercase, dot, space — none match (slug syntax matches
+        // validate_slug's [a-z0-9_-] alphabet).
+        for input in ["[[Scheduler]]", "[[with.dot]]", "[[has space]]"] {
+            assert!(re.captures(input).is_none(), "{input}");
+        }
+    }
+
+    #[test]
+    fn frontmatter_scheme_whitelist_covers_http_https_file() {
+        // Regression guard (scheme-only unit — avoids env mutation
+        // that Rust 2024 made `unsafe`): the whitelist used in the
+        // `for url in &fm.sources` loop must accept file:// alongside
+        // http(s). Without file://, local-ingest sessions saw
+        // `sources_unused = N` forever even after every file got a
+        // wiki page citing it — observed on tokio-v3 live smoke.
+        let ok = |u: &str| {
+            u.starts_with("http://") || u.starts_with("https://") || u.starts_with("file://")
+        };
+        assert!(ok("http://ex.com/x"));
+        assert!(ok("https://ex.com/x"));
+        assert!(ok("file:///tmp/x.rs"));
+        assert!(!ok("wiki:scheduler"));
+        assert!(!ok("ftp://ex.com/x"));
     }
 }

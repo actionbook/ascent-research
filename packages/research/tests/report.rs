@@ -194,14 +194,17 @@ fn diagram_out_of_bounds_rejected() {
 // ── Spec acceptance #5: diagram missing → <img> fallback + warning ─────────
 
 #[test]
-fn diagram_missing_falls_back_to_img() {
+fn diagram_missing_renders_placeholder() {
+    // v0.2: instead of a broken `<img>`, the renderer now emits a
+    // styled `.diagram.diagram-missing` placeholder so the reader
+    // sees an obvious "diagram pending" card rather than a broken-
+    // image icon. The `diagram_fallback_img` warning is still
+    // emitted so coverage / callers can surface the gap.
     let env = Env::new();
     env.prep_session(
         "s5",
         "## Overview\nbody\n\n![gone](diagrams/missing.svg)\n",
     );
-    // Ensure diagrams/ dir exists so canonicalize on parent resolves the way
-    // resolve_diagram expects.
     fs::create_dir_all(env.session_dir("s5").join("diagrams")).unwrap();
     let (v, code, _, _) = env.research(&[
         "report", "s5", "--format", "rich-html", "--no-open", "--json",
@@ -210,9 +213,14 @@ fn diagram_missing_falls_back_to_img() {
 
     let report = fs::read_to_string(env.session_dir("s5").join("report-rich.html")).unwrap();
     assert!(
-        report.contains("<img src=\"diagrams/missing.svg\""),
-        "expected <img> fallback"
+        !report.contains("<img src=\"diagrams/missing.svg\""),
+        "must NOT leave a bare broken-image <img> tag"
     );
+    assert!(
+        report.contains(r#"class="diagram diagram-missing""#),
+        "expected placeholder block"
+    );
+    assert!(report.contains("diagram pending"));
     let warnings = v["data"]["warnings"].as_array().unwrap();
     assert!(warnings.iter().any(|w| w.as_str() == Some("diagram_fallback_img")));
 }

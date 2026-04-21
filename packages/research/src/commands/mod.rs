@@ -3,6 +3,7 @@
 //! Real logic lands in subsequent specs.
 
 pub mod add;
+pub mod add_local;
 pub mod batch;
 pub mod close;
 pub mod coverage;
@@ -15,8 +16,12 @@ pub mod report;
 pub mod resume;
 pub mod rm;
 pub mod route;
+pub mod schema;
 pub mod series;
 pub mod show;
 pub mod sources;
 pub mod status;
 pub mod synthesize;
+pub mod wiki;
+pub mod wiki_lint;
+pub mod wiki_query;

@@ -92,6 +92,28 @@ pub enum Action {
         alt: String,
         svg: String,
     },
+
+    /// v3: create or replace a wiki page at `<session>/wiki/<slug>.md`.
+    /// `body` is full markdown (optional YAML frontmatter — kind,
+    /// sources, related, updated). Slug must match `[a-z0-9_-]{1,64}`.
+    /// If the page already exists, `replace` controls behavior:
+    ///   false (default) → rejected with `wiki_page_exists` warning
+    ///   true             → overwrite (use sparingly)
+    WriteWikiPage {
+        slug: String,
+        body: String,
+        #[serde(default)]
+        replace: bool,
+    },
+
+    /// v3: append a block to an existing wiki page (or create it if
+    /// missing). Content is prepended with a `<!-- appended YYYY-MM-DD -->`
+    /// marker so multi-ingest history is visible. Safer default for
+    /// incremental updates than `write_wiki_page { replace: true }`.
+    AppendWikiPage {
+        slug: String,
+        body: String,
+    },
 }
 
 #[cfg(test)]
@@ -265,6 +287,55 @@ mod tests {
                 assert!(body.contains("arxiv"));
             }
             _ => panic!("expected WritePlan"),
+        }
+    }
+
+    #[test]
+    fn parses_write_wiki_page_without_replace() {
+        let json = r#"{
+            "reasoning":"create scheduler page",
+            "actions":[{"type":"write_wiki_page","slug":"scheduler","body":"---\nkind: concept\n---\n# Scheduler"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::WriteWikiPage { slug, body, replace } => {
+                assert_eq!(slug, "scheduler");
+                assert!(body.contains("# Scheduler"));
+                assert!(!replace, "replace defaults to false");
+            }
+            _ => panic!("expected WriteWikiPage"),
+        }
+    }
+
+    #[test]
+    fn parses_write_wiki_page_with_replace_true() {
+        let json = r#"{
+            "reasoning":"overwrite",
+            "actions":[{"type":"write_wiki_page","slug":"scheduler","body":"new","replace":true}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &r.actions[0],
+            Action::WriteWikiPage { replace: true, .. }
+        ));
+    }
+
+    #[test]
+    fn parses_append_wiki_page() {
+        let json = r#"{
+            "reasoning":"add a new note",
+            "actions":[{"type":"append_wiki_page","slug":"scheduler","body":"note from iter 5"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::AppendWikiPage { slug, body } => {
+                assert_eq!(slug, "scheduler");
+                assert!(body.contains("iter 5"));
+            }
+            _ => panic!("expected AppendWikiPage"),
         }
     }
 

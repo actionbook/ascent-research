@@ -82,6 +82,33 @@ pub enum Commands {
         #[arg(long = "on-short-body")]
         on_short_body: Option<String>,
     },
+    /// Bulk-ingest a local file or directory tree as sources.
+    ///
+    /// Walks the path, applies optional --glob include/exclude patterns
+    /// (prefix with `!` to exclude), enforces per-file and per-walk size
+    /// caps, and attaches each accepted file as its own source via the
+    /// same pipeline as `research add file:///...`.
+    #[command(name = "add-local")]
+    AddLocal {
+        /// File or directory to ingest. Accepts `file://`, absolute,
+        /// relative (./x), home-relative (~/x), or bare path.
+        path: String,
+        #[arg(long)]
+        slug: Option<String>,
+        /// Glob pattern (repeatable). Prefix with `!` to exclude.
+        /// Examples: `--glob '**/*.rs'  --glob '!**/test/**'`.
+        /// If omitted, matches all files.
+        #[arg(long = "glob", action = clap::ArgAction::Append)]
+        glob: Vec<String>,
+        /// Per-file cap in bytes. Files over this are skipped with a
+        /// `too_large` reason. Default 256 KiB.
+        #[arg(long = "max-file-bytes")]
+        max_file_bytes: Option<u64>,
+        /// Total cap for the whole walk. Walk stops (not truncates)
+        /// when this would be exceeded. Default 2 MiB.
+        #[arg(long = "max-total-bytes")]
+        max_total_bytes: Option<u64>,
+    },
     /// List sources attached to the current or given session.
     Sources {
         slug: Option<String>,
@@ -190,8 +217,85 @@ pub enum Commands {
         #[arg(long = "fake-responses")]
         fake_responses: Option<String>,
     },
+    /// Inspect the per-session wiki (v3).
+    Wiki {
+        #[command(subcommand)]
+        sub: WikiCmd,
+    },
+    /// Show or edit the per-session SCHEMA.md (v3).
+    Schema {
+        #[command(subcommand)]
+        sub: SchemaCmd,
+    },
     /// Show help (alias of --help).
     Help,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SchemaCmd {
+    /// Print the session's SCHEMA.md.
+    Show {
+        #[arg(long)]
+        slug: Option<String>,
+    },
+    /// Open `$EDITOR` on the session's SCHEMA.md; logs `SchemaUpdated`
+    /// on change so the loop re-reads it next iteration.
+    Edit {
+        #[arg(long)]
+        slug: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WikiCmd {
+    /// List every wiki page in a session with slug, bytes, frontmatter kind.
+    List {
+        #[arg(long)]
+        slug: Option<String>,
+    },
+    /// Print one wiki page to stdout.
+    Show {
+        /// The page slug (filename without `.md`).
+        page: String,
+        #[arg(long)]
+        slug: Option<String>,
+    },
+    /// Remove a wiki page. Dry-run unless `--force` is passed.
+    Rm {
+        /// The page slug to remove.
+        page: String,
+        #[arg(long)]
+        slug: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Ask a question over the session's wiki; optionally save answer
+    /// as a `kind: analysis` page via `--save-as <slug>`.
+    Query {
+        /// The question to ask.
+        question: String,
+        #[arg(long)]
+        slug: Option<String>,
+        /// Save the answer as `wiki/<slug>.md` with `kind: analysis`.
+        #[arg(long = "save-as")]
+        save_as: Option<String>,
+        /// Answer shape: prose (default) | comparison | table.
+        #[arg(long)]
+        format: Option<String>,
+        /// LLM provider: fake | claude | codex.
+        #[arg(long, default_value = "claude")]
+        provider: String,
+    },
+    /// Health check over the wiki (orphans, broken links, stale pages,
+    /// missing crossrefs, kind conflicts). Never blocks coverage.
+    Lint {
+        #[arg(long)]
+        slug: Option<String>,
+        /// Flag pages whose `updated:` frontmatter is older than this
+        /// many days. Default 7.
+        #[arg(long = "stale-days")]
+        stale_days: Option<i64>,
+    },
 }
 
 /// Entry point used by `main.rs`. Returns the process exit code.
@@ -260,6 +364,19 @@ fn dispatch(cmd: Commands) -> Envelope {
             min_bytes,
             on_short_body.as_deref(),
         ),
+        Commands::AddLocal {
+            path,
+            slug,
+            glob,
+            max_file_bytes,
+            max_total_bytes,
+        } => commands::add_local::run(
+            &path,
+            slug.as_deref(),
+            &glob,
+            max_file_bytes,
+            max_total_bytes,
+        ),
         Commands::Sources { slug, rejected } => {
             commands::sources::run(slug.as_deref(), rejected)
         }
@@ -319,6 +436,31 @@ fn dispatch(cmd: Commands) -> Envelope {
             dry_run,
             fake_responses.as_deref().map(split_fake_responses),
         ),
+        Commands::Wiki { sub } => match sub {
+            WikiCmd::List { slug } => commands::wiki::run_list(slug.as_deref()),
+            WikiCmd::Show { page, slug } => {
+                commands::wiki::run_show(&page, slug.as_deref())
+            }
+            WikiCmd::Rm { page, slug, force } => {
+                commands::wiki::run_rm(&page, slug.as_deref(), force)
+            }
+            WikiCmd::Query { question, slug, save_as, format, provider } => {
+                commands::wiki_query::run(
+                    &question,
+                    slug.as_deref(),
+                    save_as.as_deref(),
+                    format.as_deref(),
+                    &provider,
+                )
+            }
+            WikiCmd::Lint { slug, stale_days } => {
+                commands::wiki_lint::run(slug.as_deref(), stale_days)
+            }
+        },
+        Commands::Schema { sub } => match sub {
+            SchemaCmd::Show { slug } => commands::schema::run_show(slug.as_deref()),
+            SchemaCmd::Edit { slug } => commands::schema::run_edit(slug.as_deref()),
+        },
         Commands::Help => unreachable!("Help handled in run()"),
     }
 }

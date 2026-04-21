@@ -203,6 +203,145 @@
       margin-top: 4rem;
     }
 
+    /* v3: wiki pages — one .wiki-page per entity / concept / source
+       summary. Grouped under .wiki-root between the numbered sections
+       and Sources. */
+    .wiki-root {
+      margin-top: 3rem;
+      padding-top: 1.6rem;
+      border-top: 1px solid var(--color-rule);
+    }
+    .wiki-root > h2 { margin-top: 0; }
+    .wiki-toc {
+      background: var(--color-paper-2);
+      border: 1px solid var(--color-rule);
+      border-radius: 6px;
+      padding: 1rem 1.1rem 1.2rem;
+      margin: 1rem 0 2rem;
+    }
+    .wiki-toc-label {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.6rem;
+    }
+    .wiki-toc ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.3rem 0.9rem;
+    }
+    .wiki-toc li { margin: 0; }
+    .wiki-toc a {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0.3rem 0;
+      text-decoration: none;
+      border-bottom: 1px dotted transparent;
+      color: var(--color-ink);
+    }
+    .wiki-toc a:hover { border-bottom-color: var(--color-accent); }
+    .wiki-toc-kind {
+      font-family: var(--font-mono);
+      font-size: 0.64rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      background: rgba(11,13,11,0.04);
+      padding: 1px 6px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      min-width: 5.5em;
+      text-align: center;
+    }
+    .wiki-toc-name {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      font-weight: 500;
+      flex-grow: 1;
+    }
+    .wiki-toc-updated {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--color-muted);
+    }
+    .wiki-page {
+      margin: 1.6rem 0 2rem;
+      padding-left: 1rem;
+      border-left: 2px solid var(--color-rule);
+    }
+    .wiki-page > h3 {
+      font-family: var(--font-serif);
+      font-size: 1.25rem;
+      margin: 0 0 0.4rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+    }
+    .wiki-page-back {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      text-decoration: none;
+      font-weight: 400;
+      padding: 0.15rem 0.5rem;
+      border: 1px solid var(--color-rule);
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+    .wiki-page-back:hover {
+      color: var(--color-accent);
+      border-color: var(--color-accent);
+    }
+    .wiki-link {
+      text-decoration: none;
+      border-bottom: 1px dotted var(--color-accent);
+    }
+    .wiki-broken {
+      color: var(--color-accent);
+      background: rgba(247,89,31,0.08);
+      padding: 0 3px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 0.82em;
+    }
+
+    /* Diagram placeholder — author referenced a diagrams/*.svg file
+       that was never written (or was rejected by svg_safety). Show a
+       graceful "pending" card instead of a broken-image icon. */
+    .diagram-missing {
+      background: repeating-linear-gradient(
+        45deg,
+        var(--color-paper-2),
+        var(--color-paper-2) 6px,
+        var(--color-paper) 6px,
+        var(--color-paper) 12px
+      );
+      border: 1px dashed var(--color-rule);
+      text-align: center;
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .diagram-missing-label {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-accent);
+      margin-bottom: 0.4rem;
+    }
+
     /* Bilingual toggle — default hides .tr-zh; clicking 中文 reveals
        each Chinese paragraph directly below its English sibling. */
     .lang-switch {
