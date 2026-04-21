@@ -16,8 +16,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Per-file byte cap. Matches the v3 spec default.
+/// Per-file byte cap default used by `research add-local` **at the walk
+/// stage**. The walk-time cap is the authoritative contract between the
+/// `--max-file-bytes` flag and the walker.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 256 * 1024;
+
+/// Backstop cap for the *fetch* stage (i.e. `fetch::run_local`). The
+/// walker already filtered by the user-supplied `--max-file-bytes`, so
+/// the fetch-stage backstop only matters for direct `research add
+/// file:///…` invocations that skip the walker entirely. A generous
+/// value (8 MB) lets `--max-file-bytes` values between 256 KB and 8 MB
+/// flow through without being silently clipped, while still protecting
+/// against pathological direct-add calls on huge files. Callers that
+/// want a tighter effective cap apply it at the walker level where the
+/// user flag lives.
+pub const FETCH_STAGE_BACKSTOP_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct LocalRead {
@@ -78,6 +91,14 @@ pub fn read_file(path: &Path, max_bytes: u64) -> Result<LocalRead, LocalError> {
         });
     }
     let body = fs::read(path).map_err(|e| LocalError::NotReadable(format!("read: {e}")))?;
+    if !looks_like_text(&body) {
+        // The tree walker already applies `looks_like_text` before
+        // accepting a path. This second gate catches direct
+        // `research add file:///some.bin` invocations — without it the
+        // binary `LocalError::Binary` variant is effectively dead code
+        // and we pollute sessions with unreadable payloads.
+        return Err(LocalError::Binary(path.to_path_buf()));
+    }
     Ok(LocalRead {
         body,
         observed_path: path.to_path_buf(),
@@ -278,6 +299,35 @@ mod tests {
         v.push(0);
         v.extend_from_slice(b"suffix");
         assert!(!looks_like_text(&v));
+    }
+
+    #[test]
+    fn read_file_rejects_binary_payload() {
+        // v0.2 review fix: `read_file` must gate binary content at the
+        // fetch layer so direct `research add file:///some.bin` can't
+        // sneak past the walker's text check.
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut buf = vec![b'x'; 64];
+        buf.push(0); // null byte → looks_like_text returns false
+        buf.extend(vec![b'y'; 64]);
+        tmp.as_file().write_all(&buf).unwrap();
+        match read_file(tmp.path(), DEFAULT_MAX_FILE_BYTES) {
+            Err(LocalError::Binary(_)) => {}
+            other => panic!("expected Binary, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_backstop_exceeds_walk_default() {
+        // v0.2 review fix: the walk-stage default is the authoritative
+        // --max-file-bytes contract; the fetch-stage backstop must be
+        // loose enough that reasonable user overrides (up to several
+        // MB) flow through without being clipped at fetch time.
+        assert!(FETCH_STAGE_BACKSTOP_BYTES > DEFAULT_MAX_FILE_BYTES);
+        // A user asking for 1 MB should be honored by the fetch stage.
+        let one_mb: u64 = 1024 * 1024;
+        assert!(FETCH_STAGE_BACKSTOP_BYTES >= one_mb);
     }
 
     // walk_tree tests

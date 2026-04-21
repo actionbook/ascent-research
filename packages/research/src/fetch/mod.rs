@@ -74,7 +74,11 @@ fn run_local(url: &str, smell_cfg: smell::SmellConfig) -> (Vec<u8>, FetchOutcome
     // `route::classify_as_local`. Strip the scheme to get the disk path.
     let path_str = url.strip_prefix("file://").unwrap_or(url);
     let path = std::path::Path::new(path_str);
-    match local::read_file(path, local::DEFAULT_MAX_FILE_BYTES) {
+    // Intentionally uses the fetch-stage backstop, not the walk-stage
+    // default — see `local::FETCH_STAGE_BACKSTOP_BYTES` for the
+    // separation-of-concerns rationale. The --max-file-bytes flag is
+    // already enforced by `add_local::run` at the walk level.
+    match local::read_file(path, local::FETCH_STAGE_BACKSTOP_BYTES) {
         Ok(read) => {
             // Route through the existing browser-shape smell test — it's
             // the text-content judge we already trust. observed_url is
