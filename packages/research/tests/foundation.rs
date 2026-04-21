@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::process::Command;
 
 fn binary() -> String {
-    env!("CARGO_BIN_EXE_research").to_string()
+    env!("CARGO_BIN_EXE_ascent-research").to_string()
 }
 
 fn run(args: &[&str]) -> (String, String, i32) {

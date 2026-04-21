@@ -13,18 +13,24 @@ use std::path::{Path, PathBuf};
 /// Root directory for all research sessions.
 ///
 /// Honors `ACTIONBOOK_RESEARCH_HOME` env var as an override (tests rely on
-/// this to isolate from the real ~/.actionbook). Falls back to
-/// `~/.actionbook/research/`.
+/// this to isolate from the real ~/.actionbook). Default path changed to
+/// `~/.actionbook/ascent-research/` in v0.3 (project renamed from
+/// `research-rs` to `ascent-research`); if that directory doesn't exist
+/// but the legacy `~/.actionbook/research/` does, fall back to it so
+/// existing sessions keep working without a manual move.
 pub fn research_root() -> PathBuf {
     if let Ok(override_path) = std::env::var("ACTIONBOOK_RESEARCH_HOME") {
         if !override_path.is_empty() {
             return PathBuf::from(override_path);
         }
     }
-    dirs::home_dir()
-        .expect("home_dir must be resolvable on supported platforms")
-        .join(".actionbook")
-        .join("research")
+    let home = dirs::home_dir().expect("home_dir must be resolvable on supported platforms");
+    let ascent = home.join(".actionbook").join("ascent-research");
+    let legacy = home.join(".actionbook").join("research");
+    if !ascent.exists() && legacy.exists() {
+        return legacy;
+    }
+    ascent
 }
 
 /// Absolute path to a specific session directory.

@@ -1,12 +1,12 @@
 [package]
-name = "research"
-version = "0.2.0"
+name = "ascent-research"
+version = "0.3.0"
 edition = "2024"
-description = "Research workflow CLI — orchestrates postagent + actionbook browser for reproducible research sessions, with per-session wiki pages and a figure-rich autonomous loop (v0.2)"
+description = "ascent-research — an incremental research workflow CLI for AI agents. Every session resumes; knowledge accretes across runs. Mixes HTTP, browser, and local file ingest into a durable per-session wiki + figure-rich HTML report."
 license = "MIT"
 
 [[bin]]
-name = "research"
+name = "ascent-research"
 path = "src/main.rs"
 
 [lib]

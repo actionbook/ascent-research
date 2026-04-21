@@ -1,7 +1,7 @@
 ---
-name: research-cli
-description: Full research-rs CLI — orchestrate postagent (HTTP API) + actionbook browser (CDP) + local file ingest to build reproducible research sessions with a persistent wiki layer, autonomous LLM loop, and editorial HTML reports. Covers all command surfaces — online fetch (add / batch / route), local ingest (add-local), session lifecycle (new / list / status / resume / close / rm / series / fork via --from), autonomous loop, wiki knowledge layer (list / show / rm / query / lint), user-editable SCHEMA.md, and renderers (synthesize / report / coverage / diff). Use for any "build a reproducible report on topic X" or "investigate source tree Y" or "compare technologies A and B with citations" request.
-triggers: research, deep dive, deep-dive, investigate, analyze topic, survey, literature review, compare frameworks, review source, source tree, build knowledge base, library analysis, codebase analysis, actionbook research, research loop, session report
+name: ascent-research
+description: Full ascent-research CLI — incremental, resumable research sessions driven from a Claude Code or Codex instance. Orchestrate postagent (HTTP API) + actionbook browser (CDP) + local file ingest to build reproducible sessions with a persistent wiki layer, autonomous LLM loop, and editorial HTML reports. Covers all command surfaces — online fetch (add / batch / route), local ingest (add-local), session lifecycle (new / list / status / resume / close / rm / series / fork via --from), autonomous loop, wiki knowledge layer (list / show / rm / query / lint), user-editable SCHEMA.md, and renderers (synthesize / report / coverage / diff). Use for any "build a reproducible report on topic X" or "investigate source tree Y" or "compare technologies A and B with citations" request.
+triggers: research, deep dive, deep-dive, investigate, analyze topic, survey, literature review, compare frameworks, review source, source tree, build knowledge base, library analysis, codebase analysis, ascent-research, research loop, session report
 force_tool_turns: 15
 ---
 
