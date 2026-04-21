@@ -243,10 +243,22 @@ fn render_rich_html(
         warnings.push(format!("broken_wiki_links: {} — see coverage", wiki.broken_links));
     }
 
-    let combined_body = if wiki.page_count == 0 {
-        rendered.body_html.clone()
-    } else {
-        format!("{}\n{}", rendered.body_html, wiki.html)
+    // v3: render any SVG files that exist in `<session>/diagrams/` but
+    // aren't referenced from session.md or any wiki page. Without this
+    // pass, an SVG the agent wrote via `write_diagram` but forgot to
+    // pair with `![alt](diagrams/x.svg)` stays invisible in the report.
+    // tokio-v3 smoke caught this — `task-lifecycle.svg` (5.5 KB) was on
+    // disk but silent.
+    let orphan_diagrams_html = render_orphan_diagrams(slug, &session_dir, &md);
+
+    let combined_body = match (wiki.page_count, orphan_diagrams_html.is_empty()) {
+        (0, true) => rendered.body_html.clone(),
+        (0, false) => format!("{}\n{}", rendered.body_html, orphan_diagrams_html),
+        (_, true) => format!("{}\n{}", rendered.body_html, wiki.html),
+        (_, false) => format!(
+            "{}\n{}\n{}",
+            rendered.body_html, wiki.html, orphan_diagrams_html
+        ),
     };
 
     let body_html = if bilingual {
@@ -306,6 +318,77 @@ fn should_skip_open() -> bool {
         return true;
     }
     !std::io::stdin().is_terminal()
+}
+
+/// Scan `<session>/diagrams/` for `.svg` files that aren't referenced
+/// from session.md or any wiki page, and produce an HTML block that
+/// inlines them so the agent's effort isn't lost on the rendered
+/// report. Each orphan SVG renders as a `.diagram` block with a
+/// caption derived from the filename.
+fn render_orphan_diagrams(_slug: &str, session_dir: &std::path::Path, md: &str) -> String {
+    let diagrams_dir = session_dir.join("diagrams");
+    let Ok(entries) = fs::read_dir(&diagrams_dir) else {
+        return String::new();
+    };
+    let mut on_disk: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("svg"))
+        .filter_map(|e| {
+            e.path()
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    on_disk.sort();
+    if on_disk.is_empty() {
+        return String::new();
+    }
+
+    // A filename is "referenced" if ANY of session.md / wiki pages
+    // contain `diagrams/<filename>`. Cheap substring check — the md
+    // render layer already enforces the exact `![](diagrams/…)` shape
+    // before inlining, so the false-positive risk of unrelated text is
+    // near-zero.
+    let mut all_text = md.to_string();
+    if let Ok(entries) = fs::read_dir(session_dir.join("wiki")) {
+        for e in entries.flatten() {
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
+                if let Ok(body) = fs::read_to_string(e.path()) {
+                    all_text.push('\n');
+                    all_text.push_str(&body);
+                }
+            }
+        }
+    }
+    let orphans: Vec<String> = on_disk
+        .into_iter()
+        .filter(|f| !all_text.contains(&format!("diagrams/{f}")))
+        .collect();
+    if orphans.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str(r#"<section class="orphan-diagrams"><h2><span class="section-num">DIAGRAMS</span><span>Authored but unreferenced</span></h2>"#);
+    out.push_str("<p class=\"sub\">These diagrams were written via <code>write_diagram</code> but no prose or wiki page links to them. Rendered here so the work isn't lost.</p>");
+    for fname in &orphans {
+        let path = diagrams_dir.join(fname);
+        let svg = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if svg.len() > 512 * 1024 {
+            continue;
+        }
+        let caption = fname.strip_suffix(".svg").unwrap_or(fname).replace('-', " ");
+        out.push_str(r#"<div class="diagram">"#);
+        out.push_str(&svg);
+        out.push_str(&format!("<p class=\"caption\">{caption}</p>"));
+        out.push_str("</div>");
+    }
+    out.push_str("</section>");
+    out
 }
 
 fn rel_path(p: &std::path::Path) -> String {
