@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0 — ascent-research rebrand
+
+Project renamed from `research-rs` to `ascent-research` to foreground
+the incremental-research story. No breaking changes to the on-disk
+session format; v0.2 sessions resume unchanged via a legacy-path
+fallback.
+
+### Changed
+
+- Crate + binary renamed: `research` → `ascent-research`. The old
+  binary name is gone; update any scripts that called `research` to
+  `ascent-research`.
+- Session root default path: `~/.actionbook/research/` →
+  `~/.actionbook/ascent-research/`. If the new path doesn't exist
+  but the legacy one does, it's read as fallback so existing
+  sessions keep working. Override via `ACTIONBOOK_RESEARCH_HOME`
+  unchanged.
+- Bundled skill renamed: `skills/research-cli/` → `skills/ascent-research/`
+  with its `name:` frontmatter updated to match.
+- README front-loads slogan + one-line pitch + quick-usage, trims
+  internals to a single "Why it's different" section with five
+  properties (autoresearch lineage / incremental / 3-way ingest /
+  figure-rich / infra-enforced). Full internals live in the
+  bundled skill.
+- README now documents the two usage shapes: **standalone** (CLI
+  drives its own loop) and **skill** (called from a Claude Code
+  or Codex instance).
+
+### Added
+
+- README section "Two ways to use it" describing standalone vs
+  skill-in-CC-instance modes and how sessions are portable
+  between them.
+
 ## 0.2.0 — local-wiki
 
 Major release: local file ingest + karpathy-style per-session wiki

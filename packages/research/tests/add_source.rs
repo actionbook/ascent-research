@@ -12,7 +12,7 @@ use std::process::Command;
 use tempfile::TempDir;
 
 fn research_bin() -> String {
-    env!("CARGO_BIN_EXE_research").to_string()
+    env!("CARGO_BIN_EXE_ascent-research").to_string()
 }
 
 /// Per-test isolated home + fake-binary factory.
