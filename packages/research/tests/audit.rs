@@ -1,5 +1,6 @@
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -415,6 +416,46 @@ fn audit_detects_orphan_completed_tool_call() {
     assert_eq!(v["data"]["tools"]["orphan_completed"], 1);
     let blockers = v["data"]["audit_blockers"].as_array().unwrap();
     assert!(array_contains_str(blockers, "tool_calls_orphan_completed"));
+}
+
+#[test]
+fn audit_reports_event_log_malformed_lines() {
+    let env = Env::new();
+    let slug = "audit-malformed-log";
+    env.new_session(slug, &[]);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(env.jsonl_path(slug))
+        .unwrap();
+    file.write_all(b"{not valid json\n").unwrap();
+
+    let (v, code, stderr, _) = env.research(&["--json", "audit", slug]);
+    assert_eq!(code, 0, "stderr={stderr}; envelope={v}");
+    assert!(v["data"]["event_log"]["malformed_lines"].as_u64().unwrap() > 0);
+    assert_eq!(v["data"]["audit_status"], "incomplete");
+    let blockers = v["data"]["audit_blockers"].as_array().unwrap();
+    assert!(array_contains_str(blockers, "event_log_malformed_lines"));
+}
+
+#[test]
+fn audit_reports_event_log_unknown_events() {
+    let env = Env::new();
+    let slug = "audit-unknown-event";
+    env.new_session(slug, &[]);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(env.jsonl_path(slug))
+        .unwrap();
+    file.write_all(br#"{"event":"future_event","timestamp":"2026-04-24T00:00:00Z"}"#)
+        .unwrap();
+    file.write_all(b"\n").unwrap();
+
+    let (v, code, stderr, _) = env.research(&["--json", "audit", slug]);
+    assert_eq!(code, 0, "stderr={stderr}; envelope={v}");
+    assert!(v["data"]["event_log"]["unknown_events"].as_u64().unwrap() > 0);
+    assert_eq!(v["data"]["audit_status"], "incomplete");
+    let blockers = v["data"]["audit_blockers"].as_array().unwrap();
+    assert!(array_contains_str(blockers, "event_log_unknown_events"));
 }
 
 #[test]

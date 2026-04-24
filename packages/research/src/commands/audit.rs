@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use crate::output::Envelope;
 use crate::session::{
     active, config,
-    event::{FactCheckOutcome, SessionEvent, ToolCallStatus},
-    layout, log,
+    event::{
+        FactCheckOutcome, SessionEvent, ToolCallStatus, read_events_with_diagnostics,
+    },
+    layout,
 };
 
 const CMD: &str = "research audit";
@@ -49,10 +51,12 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
         Ok(c) => c,
         Err(e) => return Envelope::fail(CMD, "IO_ERROR", format!("read session.toml: {e}")),
     };
-    let events = match log::read_all(&slug) {
-        Ok(events) => events,
+    let event_log = match read_events_with_diagnostics(&layout::session_jsonl(&slug)) {
+        Ok(read) => read,
         Err(e) => return Envelope::fail(CMD, "IO_ERROR", format!("read session.jsonl: {e}")),
     };
+    let events = event_log.events;
+    let event_log_diagnostics = event_log.diagnostics;
 
     let fact_check_required = cfg.tags.iter().any(|tag| tag == "fact-check");
     let mut accepted_sources = HashSet::new();
@@ -283,6 +287,24 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     if synth_completed == 0 {
         blockers.push("synthesize_completed 0 < 1".to_string());
     }
+    if event_log_diagnostics.malformed_lines > 0 {
+        blockers.push(format!(
+            "event_log_malformed_lines {} > 0",
+            event_log_diagnostics.malformed_lines
+        ));
+    }
+    if event_log_diagnostics.unknown_events > 0 {
+        blockers.push(format!(
+            "event_log_unknown_events {} > 0",
+            event_log_diagnostics.unknown_events
+        ));
+    }
+    if event_log_diagnostics.parse_errors > 0 {
+        blockers.push(format!(
+            "event_log_parse_errors {} > 0",
+            event_log_diagnostics.parse_errors
+        ));
+    }
     let report_html = inspect_report_html(&slug, latest_report_html.as_deref());
     let zh_paragraphs = report_html["zh_paragraphs"].as_u64().unwrap_or(0);
     if synth_bilingual_started > 0 && zh_paragraphs == 0 {
@@ -311,6 +333,11 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             "audit_status": audit_status,
             "audit_blockers": blockers,
             "events_total": events.len(),
+            "event_log": {
+                "malformed_lines": event_log_diagnostics.malformed_lines,
+                "unknown_events": event_log_diagnostics.unknown_events,
+                "parse_errors": event_log_diagnostics.parse_errors,
+            },
             "sources": {
                 "attempted": sources_attempted,
                 "accepted": sources_accepted,
