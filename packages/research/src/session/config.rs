@@ -36,7 +36,11 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
-    pub fn new(slug: impl Into<String>, topic: impl Into<String>, preset: impl Into<String>) -> Self {
+    pub fn new(
+        slug: impl Into<String>,
+        topic: impl Into<String>,
+        preset: impl Into<String>,
+    ) -> Self {
         Self {
             slug: slug.into(),
             topic: topic.into(),

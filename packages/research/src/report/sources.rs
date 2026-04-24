@@ -5,7 +5,7 @@
 //! is **not** consulted — jsonl is the authoritative fact stream, md is a
 //! human-readable projection.
 
-use crate::session::event::{read_events, SessionEvent};
+use crate::session::event::{SessionEvent, read_events};
 use std::path::Path;
 
 #[derive(Debug, Clone)]

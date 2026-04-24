@@ -84,7 +84,13 @@ mod tests {
         ];
         let mut out = String::new();
         for ev in &evs {
-            if let SessionEvent::SourceAccepted { url, kind, trust_score, .. } = ev {
+            if let SessionEvent::SourceAccepted {
+                url,
+                kind,
+                trust_score,
+                ..
+            } = ev
+            {
                 out.push_str(&format!("- [{kind} · trust {trust_score:.1}] {url}\n"));
             }
         }

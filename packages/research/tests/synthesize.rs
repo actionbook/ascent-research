@@ -7,7 +7,7 @@
 
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -49,7 +49,13 @@ impl Env {
     }
 }
 
-fn write_session_md(dir: &PathBuf, body: &str) {
+fn accepted_event(ts: &str, url: &str, kind: &str, bytes: u64) -> String {
+    format!(
+        r#"{{"event":"source_accepted","timestamp":"{ts}","url":"{url}","kind":"{kind}","executor":"postagent","raw_path":"raw/x.json","bytes":{bytes},"trust_score":2.0}}"#
+    )
+}
+
+fn write_session_md(dir: &Path, body: &str) {
     fs::write(dir.join("session.md"), body).unwrap();
 }
 
@@ -76,16 +82,93 @@ Long-form analysis here.
 "
 }
 
+fn ready_md(url: &str) -> String {
+    let overview = "Overview body with enough content to satisfy the coverage gate. ".repeat(6);
+    format!(
+        "\
+# Research: T
+
+## Overview
+{overview}
+
+## Findings
+### Finding A
+Body for A.
+
+### Finding B
+Body for B.
+
+## Notes
+Long-form analysis here, grounded by [the accepted source]({url}).
+
+## 01 · A
+Body a with a grounded claim from [the accepted source]({url}).
+
+## 02 · B
+Body b.
+
+## 03 · C
+Body c with a diagram.
+
+![f](diagrams/g.svg)
+
+## Sources
+<!-- research:sources-start -->
+<!-- research:sources-end -->
+"
+    )
+}
+
+fn append_jsonl_line(dir: &Path, line: &str) {
+    let path = dir.join("session.jsonl");
+    let mut current = fs::read_to_string(&path).unwrap_or_default();
+    current.push_str(line);
+    current.push('\n');
+    fs::write(path, current).unwrap();
+}
+
+fn prep_report_ready_session(env: &Env, slug: &str) {
+    env.research(&["new", "topic", "--slug", slug, "--json"]);
+    let dir = env.session_dir(slug);
+    let url = "https://ok.test/";
+    write_session_md(&dir, &ready_md(url));
+    let diag = dir.join("diagrams");
+    fs::create_dir_all(&diag).unwrap();
+    fs::write(diag.join("g.svg"), "<svg/>").unwrap();
+    append_jsonl_line(&dir, &accepted_event("2026-04-20T10:00:00Z", url, "k", 1));
+}
+
+fn prep_fact_check_tagged_report_ready_session(env: &Env, slug: &str) {
+    env.research(&[
+        "new",
+        "topic",
+        "--slug",
+        slug,
+        "--tag",
+        "fact-check",
+        "--json",
+    ]);
+    let dir = env.session_dir(slug);
+    let url = "https://ok.test/";
+    write_session_md(&dir, &ready_md(url));
+    let diag = dir.join("diagrams");
+    fs::create_dir_all(&diag).unwrap();
+    fs::write(diag.join("g.svg"), "<svg/>").unwrap();
+    append_jsonl_line(&dir, &accepted_event("2026-04-20T10:00:00Z", url, "k", 1));
+}
+
 #[test]
 fn synthesize_happy_path_writes_json_and_html() {
     let env = Env::new();
-    env.research(&["new", "topic", "--slug", "s1", "--json"]);
-    write_session_md(&env.session_dir("s1"), sample_md());
+    prep_report_ready_session(&env, "s1");
 
     let (v, code, stderr) = env.research(&["synthesize", "s1", "--json"]);
     assert_eq!(code, 0, "stderr: {stderr}; v={v}");
-    assert_eq!(v["data"]["accepted_sources"], 0);
+    assert_eq!(v["data"]["accepted_sources"], 1);
     assert_eq!(v["data"]["rejected_sources"], 0);
+    assert_eq!(v["data"]["bilingual"]["requested"], false);
+    assert_eq!(v["data"]["bilingual"]["status"], "not_requested");
+    assert_eq!(v["data"]["bilingual"]["zh_paragraphs"], 0);
     assert!(env.session_dir("s1").join("report.json").exists());
     assert!(env.session_dir("s1").join("report.html").exists());
 
@@ -107,8 +190,7 @@ fn synthesize_missing_overview_is_fatal() {
 #[test]
 fn synthesize_no_render_skips_html() {
     let env = Env::new();
-    env.research(&["new", "t3", "--slug", "s3", "--json"]);
-    write_session_md(&env.session_dir("s3"), sample_md());
+    prep_report_ready_session(&env, "s3");
 
     let (v, code, _) = env.research(&["synthesize", "s3", "--no-render", "--json"]);
     assert_eq!(code, 0);
@@ -120,15 +202,17 @@ fn synthesize_no_render_skips_html() {
 #[test]
 fn synthesize_report_has_canonical_structure() {
     let env = Env::new();
-    env.research(&["new", "t5", "--slug", "s5", "--json"]);
-    write_session_md(&env.session_dir("s5"), sample_md());
+    prep_report_ready_session(&env, "s5");
     env.research(&["synthesize", "s5", "--json"]);
 
     let text = fs::read_to_string(env.session_dir("s5").join("report.json")).unwrap();
     let v: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["type"], "Report");
     let children = v["children"].as_array().unwrap();
-    let types: Vec<&str> = children.iter().map(|c| c["type"].as_str().unwrap()).collect();
+    let types: Vec<&str> = children
+        .iter()
+        .map(|c| c["type"].as_str().unwrap())
+        .collect();
     assert!(types.contains(&"BrandHeader"));
     assert!(types.contains(&"BrandFooter"));
     let titles: Vec<&str> = children
@@ -143,15 +227,20 @@ fn synthesize_report_has_canonical_structure() {
 
     // rich-html render produced the HTML too (shared pipeline).
     let html = fs::read_to_string(env.session_dir("s5").join("report.html")).unwrap();
-    assert!(html.contains("Instrument Serif"), "rich-html template signature");
-    assert!(html.contains("#f7591f") || html.contains("f7591f"), "accent color token");
+    assert!(
+        html.contains("Instrument Serif"),
+        "rich-html template signature"
+    );
+    assert!(
+        html.contains("#f7591f") || html.contains("f7591f"),
+        "accent color token"
+    );
 }
 
 #[test]
 fn synthesize_is_idempotent_rewrite() {
     let env = Env::new();
-    env.research(&["new", "t6", "--slug", "s6", "--json"]);
-    write_session_md(&env.session_dir("s6"), sample_md());
+    prep_report_ready_session(&env, "s6");
     let args: &[&str] = &["synthesize", "s6", "--json"];
 
     let (_, code1, _) = env.research(args);
@@ -163,14 +252,25 @@ fn synthesize_is_idempotent_rewrite() {
 # Research: T
 
 ## Overview
-Overview body with enough content to not be a placeholder.
+Overview body with enough content to satisfy the coverage gate. Overview body with enough content to satisfy the coverage gate. Overview body with enough content to satisfy the coverage gate. Overview body with enough content to satisfy the coverage gate. Overview body with enough content to satisfy the coverage gate. Overview body with enough content to satisfy the coverage gate.
 
 ## Findings
 ### Only One
 The one finding.
 
 ## Notes
-Notes.
+Notes grounded by [the accepted source](https://ok.test/).
+
+## 01 · A
+Body a with a grounded claim from [the accepted source](https://ok.test/).
+
+## 02 · B
+Body b.
+
+## 03 · C
+Body c with a diagram.
+
+![f](diagrams/g.svg)
 
 ## Sources
 <!-- research:sources-start -->
@@ -192,7 +292,70 @@ Notes.
         .iter()
         .find(|c| c["props"]["title"] == "Key Findings")
         .unwrap();
-    let items = findings["children"][0]["props"]["items"].as_array().unwrap();
+    let items = findings["children"][0]["props"]["items"]
+        .as_array()
+        .unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["title"], "Only One");
+}
+
+#[test]
+fn synthesize_rejects_session_when_coverage_not_ready() {
+    let env = Env::new();
+    env.research(&["new", "topic", "--slug", "s7", "--json"]);
+    write_session_md(&env.session_dir("s7"), sample_md());
+
+    let (v, code, _) = env.research(&["synthesize", "s7", "--json"]);
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "REPORT_NOT_READY");
+    let blockers = v["error"]["details"]["report_ready_blockers"]
+        .as_array()
+        .unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("sources_accepted"))
+    );
+    assert!(!env.session_dir("s7").join("report.json").exists());
+    assert!(!env.session_dir("s7").join("report.html").exists());
+}
+
+#[test]
+fn synthesize_rejects_fact_check_tag_without_fact_check() {
+    let env = Env::new();
+    prep_fact_check_tagged_report_ready_session(&env, "s8");
+
+    let (v, code, _) = env.research(&["synthesize", "s8", "--json"]);
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "REPORT_NOT_READY");
+    let blockers = v["error"]["details"]["report_ready_blockers"]
+        .as_array()
+        .unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("fact_checks_total")),
+        "expected fact-check blocker; got: {blockers:?}"
+    );
+    assert!(!env.session_dir("s8").join("report.html").exists());
+}
+
+#[test]
+fn skill_requires_fact_check_for_dynamic_topics() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let skill_path = repo_root.join("skills/ascent-research/SKILL.md");
+    let skill = fs::read_to_string(&skill_path).expect("read ascent-research skill");
+    let lower = skill.to_lowercase();
+
+    assert!(
+        skill.contains("--tag fact-check"),
+        "skill must require fact-check tag for dynamic topics"
+    );
+    assert!(skill.contains("fact_checks_total"));
+    assert!(skill.contains("fact_check"));
+    assert!(lower.contains("live"));
+    assert!(lower.contains("sports"));
+    assert!(lower.contains("news"));
+    assert!(lower.contains("current roster"));
+    assert!(lower.contains("current price"));
 }

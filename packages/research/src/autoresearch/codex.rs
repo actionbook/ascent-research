@@ -19,11 +19,11 @@
 
 use super::provider::{AgentProvider, ProviderError};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// How long we're willing to wait for the whole exchange. Codex turns can
 /// be slow (10-30 s typical) but not minutes.
@@ -62,10 +62,12 @@ impl AgentProvider for CodexProvider {
     async fn ask(&self, system: &str, user: &str) -> Result<String, ProviderError> {
         timeout(TURN_TIMEOUT, self.exchange(system, user))
             .await
-            .map_err(|_| ProviderError::CallFailed(format!(
-                "codex exchange exceeded {}s",
-                TURN_TIMEOUT.as_secs()
-            )))?
+            .map_err(|_| {
+                ProviderError::CallFailed(format!(
+                    "codex exchange exceeded {}s",
+                    TURN_TIMEOUT.as_secs()
+                ))
+            })?
     }
 
     fn name(&self) -> &'static str {
@@ -109,11 +111,10 @@ impl CodexProvider {
         // ── Start thread ──────────────────────────────────────────────
         send(&mut writer, &build_thread_start(2, system)).await?;
         let thread_resp = wait_for_response(&mut reader, 2).await?;
-        let thread_id = thread_resp["result"]["threadId"]
-            .as_str()
+        let thread_id = extract_thread_id(&thread_resp)
             .ok_or_else(|| {
                 ProviderError::CallFailed(format!(
-                    "thread/start response missing threadId: {thread_resp}"
+                    "thread/start response missing thread id: {thread_resp}"
                 ))
             })?
             .to_string();
@@ -133,6 +134,7 @@ impl CodexProvider {
             let Some(line) = read_next_line(&mut reader).await? else {
                 break;
             };
+            maybe_debug_log_line(&line);
             let msg: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -144,9 +146,7 @@ impl CodexProvider {
                     }
                 }
                 Some("turn/completed") => {
-                    turn_status = msg["params"]["turn"]["status"]
-                        .as_str()
-                        .map(str::to_string);
+                    turn_status = msg["params"]["turn"]["status"].as_str().map(str::to_string);
                     break;
                 }
                 _ => {}
@@ -223,18 +223,42 @@ fn build_turn_start(id: u64, thread_id: &str, text: &str) -> Value {
     })
 }
 
+fn extract_thread_id(resp: &Value) -> Option<&str> {
+    resp["result"]["threadId"]
+        .as_str()
+        .or_else(|| resp["result"]["thread"]["id"].as_str())
+}
+
 fn extract_assistant_text(msg: &Value) -> Option<String> {
     // `item/completed` notifications may carry an assistant message body at
     // `params.item.text` (raw text) or `params.item.content` (rich). We
     // accept both and stringify `content` as a fallback.
     let item = msg.get("params")?.get("item")?;
-    if item.get("type").and_then(Value::as_str) != Some("assistantMessage") {
+    let item_type = item.get("type").and_then(Value::as_str);
+    if !matches!(item_type, Some("assistantMessage" | "agentMessage")) {
         return None;
     }
     if let Some(text) = item.get("text").and_then(Value::as_str) {
         return Some(text.to_string());
     }
     item.get("content").map(|v| v.to_string())
+}
+
+fn maybe_debug_log_line(line: &str) {
+    let Ok(path) = std::env::var("ASR_CODEX_DEBUG_LOG") else {
+        return;
+    };
+    if path.trim().is_empty() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 async fn send(writer: &mut ChildStdin, msg: &Value) -> Result<(), ProviderError> {
@@ -296,10 +320,12 @@ mod tests {
         assert_eq!(msg["id"], 1);
         assert_eq!(msg["method"], "initialize");
         assert_eq!(msg["params"]["clientInfo"]["name"], "research-rs");
-        assert!(msg["params"]["clientInfo"]["version"]
-            .as_str()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false));
+        assert!(
+            msg["params"]["clientInfo"]["version"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -327,6 +353,14 @@ mod tests {
     }
 
     #[test]
+    fn extract_thread_id_accepts_legacy_and_current_shapes() {
+        let legacy = json!({ "result": { "threadId": "thr_legacy" } });
+        let current = json!({ "result": { "thread": { "id": "thr_current" } } });
+        assert_eq!(extract_thread_id(&legacy), Some("thr_legacy"));
+        assert_eq!(extract_thread_id(&current), Some("thr_current"));
+    }
+
+    #[test]
     fn extract_assistant_text_picks_text_field_over_content() {
         let msg = json!({
             "method": "item/completed",
@@ -341,6 +375,23 @@ mod tests {
         assert_eq!(
             extract_assistant_text(&msg).as_deref(),
             Some("direct text body")
+        );
+    }
+
+    #[test]
+    fn extract_assistant_text_accepts_current_agent_message_type() {
+        let msg = json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "type": "agentMessage",
+                    "text": "new app-server final answer"
+                }
+            }
+        });
+        assert_eq!(
+            extract_assistant_text(&msg).as_deref(),
+            Some("new app-server final answer")
         );
     }
 

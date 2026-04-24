@@ -52,7 +52,9 @@ pub fn execute(
 ) -> (Vec<u8>, FetchOutcome, String) {
     match RouteExecutor::parse(&decision.executor) {
         Some(RouteExecutor::Postagent) => run_postagent(decision, timeout_ms),
-        Some(RouteExecutor::Browser) => run_browser(slug, raw_n, url, readable, timeout_ms, smell_cfg),
+        Some(RouteExecutor::Browser) => {
+            run_browser(slug, raw_n, url, readable, timeout_ms, smell_cfg)
+        }
         Some(RouteExecutor::Local) => run_local(url, smell_cfg),
         None => (
             Vec::new(),
@@ -114,12 +116,14 @@ fn run_local(url: &str, smell_cfg: smell::SmellConfig) -> (Vec<u8>, FetchOutcome
     }
 }
 
-fn run_postagent(
-    decision: &RouteDecision,
-    timeout_ms: u64,
-) -> (Vec<u8>, FetchOutcome, String) {
-    let api_url = extract_api_url(&decision.command_template).unwrap_or_default();
-    match postagent::run(&api_url, timeout_ms) {
+fn run_postagent(decision: &RouteDecision, timeout_ms: u64) -> (Vec<u8>, FetchOutcome, String) {
+    let args = postagent_args_from_template(&decision.command_template).unwrap_or_else(|| {
+        vec![
+            "send".to_string(),
+            extract_api_url(&decision.command_template).unwrap_or_default(),
+        ]
+    });
+    match postagent::run_args(&args, timeout_ms) {
         Ok(raw) => {
             let stderr_text = String::from_utf8_lossy(&raw.raw_stderr).into_owned();
             let stderr_has_warning_marker =
@@ -166,7 +170,10 @@ fn run_postagent(
                     observed_url: None,
                     observed_bytes: raw.raw_stdout.len() as u64,
                     reject_reason: Some(RejectReason::FetchFailed),
-                    warnings: vec![format!("postagent output unparseable (exit {})", raw.exit_code)],
+                    warnings: vec![format!(
+                        "postagent output unparseable (exit {})",
+                        raw.exit_code
+                    )],
                     bytes: raw.raw_stdout.len() as u64,
                 },
             };
@@ -221,9 +228,67 @@ fn run_browser(
     }
 }
 
+fn postagent_args_from_template(template: &str) -> Option<Vec<String>> {
+    let tokens = shell_words(template)?;
+    if tokens.first().map(String::as_str) != Some("postagent") {
+        return None;
+    }
+    if tokens.len() < 2 {
+        return None;
+    }
+    Some(tokens[1..].to_vec())
+}
+
+fn shell_words(input: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+                while matches!(chars.peek(), Some(next) if next.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    Some(out)
+}
+
 fn extract_api_url(template: &str) -> Option<String> {
     let start = template.find('"')?;
     let rest = &template[start + 1..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_postagent_template_with_header_placeholder() {
+        let args = postagent_args_from_template(
+            r#"postagent send "https://api.github.com/repos/o/r" -H "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN""#,
+        )
+        .unwrap();
+        assert_eq!(args[0], "send");
+        assert_eq!(args[1], "https://api.github.com/repos/o/r");
+        assert_eq!(args[2], "-H");
+        assert_eq!(args[3], "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN");
+    }
 }

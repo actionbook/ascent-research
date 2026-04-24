@@ -15,18 +15,19 @@
 //! under the session.md.lock. No action reaches inside the daemon or
 //! another session.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::provider::{AgentProvider, ProviderError};
 use super::schema::{Action, LoopResponse};
 use super::svg_safety;
-use crate::session::event::SessionEvent;
-use crate::session::{layout, log};
+use crate::session::event::{FactCheckOutcome, SessionEvent};
+use crate::session::{config, layout, log};
 
 pub const DEFAULT_ITERATIONS: u32 = 5;
 pub const DEFAULT_MAX_ACTIONS: u32 = 20;
@@ -233,9 +234,7 @@ pub async fn run(
                     }
                 }
                 Err(reason) => {
-                    warnings.push(format!(
-                        "action_rejected_iter_{iter}: {reason}"
-                    ));
+                    warnings.push(format!("action_rejected_iter_{iter}: {reason}"));
                     rejected_this_round += 1;
                 }
             }
@@ -326,18 +325,64 @@ fn parse_response(raw: &str) -> Result<LoopResponse, String> {
     } else {
         trimmed
     };
-    serde_json::from_str::<LoopResponse>(candidate)
-        .map_err(|e| format!("serde: {e}"))
+    serde_json::from_str::<LoopResponse>(candidate).map_err(|e| format!("serde: {e}"))
 }
 
 fn system_prompt(slug: &str) -> String {
-    let base = base_system_prompt();
-    match crate::session::schema::prompt_body(slug) {
-        Some(extra) => format!(
-            "{base}\n\n── Session-specific schema guidance (from <session>/SCHEMA.md) ──\n{extra}\n"
-        ),
-        None => base,
+    let schema_extra = crate::session::schema::prompt_body(slug);
+    let session_cfg = config::read(slug).ok();
+    let preset = session_cfg.as_ref().map(|cfg| cfg.preset.as_str());
+    let fact_check = session_cfg
+        .as_ref()
+        .map(|cfg| cfg.tags.iter().any(|tag| tag == "fact-check"))
+        .unwrap_or(false);
+    system_prompt_from_context(schema_extra, preset, fact_check)
+}
+
+fn system_prompt_from_context(
+    schema_extra: Option<String>,
+    preset: Option<&str>,
+    fact_check: bool,
+) -> String {
+    let mut prompt = base_system_prompt();
+
+    if let Some(guidance) = preset_source_guidance(preset, fact_check) {
+        prompt.push_str("\n\n── Preset-specific source guidance ──\n");
+        prompt.push_str(&guidance);
+        prompt.push('\n');
     }
+
+    if let Some(extra) = schema_extra {
+        prompt.push_str("\n\n── Session-specific schema guidance (from <session>/SCHEMA.md) ──\n");
+        prompt.push_str(&extra);
+        prompt.push('\n');
+    }
+
+    prompt
+}
+
+fn preset_source_guidance(preset: Option<&str>, fact_check: bool) -> Option<String> {
+    if preset != Some("sports") {
+        return None;
+    }
+
+    let mut guidance = r#"Sports/current-roster source plan:
+- Seed official roster/current-status sources before writing concrete roster claims.
+- Preferred NBA roster URLs:
+  - https://www.nba.com/<team>/roster
+  - https://www.basketball-reference.com/teams/<TEAM>/<YEAR>.html
+  - https://www.espn.com/nba/team/roster/_/name/<abbr>/<team>
+- Treat these as source patterns only, not facts. Do not infer a player is on
+  or off a roster from prior knowledge."#
+        .to_string();
+
+    if fact_check {
+        guidance.push_str(
+            "\n- This session has `fact-check`: roster/current-status claims require an accepted + digested source and a matching `fact_check` event before final synthesis.",
+        );
+    }
+
+    Some(guidance)
 }
 
 fn base_system_prompt() -> String {
@@ -364,6 +409,9 @@ Valid action shapes (each is an object with a "type" field):
   { "type": "write_aside", "body": "short italic epigraph text" }
   { "type": "note_diagram_needed", "name": "axis.svg", "hint": "what the diagram should show" }
   { "type": "digest_source", "url": "https://...", "into_section": "## 02 · WHAT" }
+  { "type": "fact_check", "claim": "specific claim text", "query": "search/query used to verify it",
+    "sources": ["https://accepted-source.test/..."], "outcome": "supported|refuted|uncertain",
+    "into_section": "## 02 · WHAT", "note": "short evidence note" }
   { "type": "write_plan", "body": "Goal: …\nSources: arxiv+github+HN\nMilestones: iter 2 → fetch; iter 4 → draft" }
   { "type": "write_diagram", "path": "axis.svg", "alt": "philosophy axis",
     "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 920 380\">…</svg>" }
@@ -449,6 +497,25 @@ Workflow: plan → fetch → digest + write → mark diagrams.
 - `into_section` must match the `heading` of a WriteSection you just
   wrote (or an existing section). Use this to link the source to its
   landing place in the narrative.
+- For live/current/dynamic facts, emit `fact_check` before the report
+  depends on the claim. Its `sources` must be accepted source URLs from
+  this session, and `outcome` must be exactly `supported`, `refuted`, or
+  `uncertain`. Use `uncertain` when evidence is insufficient or stale;
+  do not convert uncertainty into a confident report sentence.
+
+GROUNDING CONTRACT (non-negotiable):
+- Any statement naming a specific person, team, date, or number must be
+  supported by a digested source URL already accepted in this session.
+  If no digested source supports a claim, do not write it.
+- If the session requires fact-checking, any concrete person, team, date,
+  number, price, roster, standing, release version, or current-status
+  claim must also have a matching `fact_check` action in the event log
+  before final synthesis.
+- Do NOT rely on prior knowledge for rosters, standings, prices,
+  release versions, dates, or "everybody knows" facts. Fetch and digest
+  a current source first.
+- If sources conflict or look stale, say so explicitly and fetch a
+  corroborating source instead of picking one silently.
 
 Wiki pages — the PREFERRED ingest surface (v3).
 
@@ -611,11 +678,7 @@ fn user_prompt(
         out.push_str("unread sources (fetched but not yet digested — pick one per turn,\n");
         out.push_str("write a finding that cites the URL, and emit a `digest_source` action):\n\n");
         for (i, u) in unread.iter().enumerate() {
-            out.push_str(&format!(
-                "--- {} / {} ---\n",
-                i + 1,
-                unread.len()
-            ));
+            out.push_str(&format!("--- {} / {} ---\n", i + 1, unread.len()));
             out.push_str(&format!("url: {}\nkind: {}\n", u.url, u.kind));
             out.push_str("raw (truncated):\n");
             out.push_str(&u.snippet);
@@ -671,11 +734,11 @@ fn orphan_diagram_files(slug: &str) -> Vec<String> {
     let wiki_dir = layout::session_dir(slug).join("wiki");
     if let Ok(entries) = std::fs::read_dir(&wiki_dir) {
         for e in entries.flatten() {
-            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok(body) = std::fs::read_to_string(e.path()) {
-                    corpus.push('\n');
-                    corpus.push_str(&body);
-                }
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md")
+                && let Ok(body) = std::fs::read_to_string(e.path())
+            {
+                corpus.push('\n');
+                corpus.push_str(&body);
             }
         }
     }
@@ -822,16 +885,34 @@ fn dispatch_action(
         Action::DigestSource { url, into_section } => {
             digest_source(slug, iteration, url, into_section)
         }
+        Action::FactCheck {
+            claim,
+            query,
+            sources,
+            outcome,
+            into_section,
+            note,
+        } => fact_check(FactCheckInput {
+            slug,
+            iteration,
+            claim,
+            query,
+            sources,
+            outcome: *outcome,
+            into_section,
+            note: note.as_deref(),
+        }),
         Action::WritePlan { body } => write_plan(slug, iteration, body),
-        Action::WriteDiagram { path, alt, svg } => {
-            write_diagram(slug, iteration, path, alt, svg)
-        }
-        Action::WriteWikiPage { slug: page_slug, body, replace } => {
-            write_wiki_page(slug, iteration, page_slug, body, *replace)
-        }
-        Action::AppendWikiPage { slug: page_slug, body } => {
-            append_wiki_page(slug, iteration, page_slug, body)
-        }
+        Action::WriteDiagram { path, alt, svg } => write_diagram(slug, iteration, path, alt, svg),
+        Action::WriteWikiPage {
+            slug: page_slug,
+            body,
+            replace,
+        } => write_wiki_page(slug, iteration, page_slug, body, *replace),
+        Action::AppendWikiPage {
+            slug: page_slug,
+            body,
+        } => append_wiki_page(slug, iteration, page_slug, body),
     }
 }
 
@@ -901,19 +982,23 @@ fn digest_source(slug: &str, iteration: u32, url: &str, into_section: &str) -> R
     // Validate: URL must be among accepted sources (don't let the agent
     // digest URLs it never fetched — that'd be hallucination).
     let events = log::read_all(slug).unwrap_or_default();
-    let known = events.iter().any(|e| matches!(
-        e,
-        SessionEvent::SourceAccepted { url: u, .. } if u == url
-    ));
+    let known = events.iter().any(|e| {
+        matches!(
+            e,
+            SessionEvent::SourceAccepted { url: u, .. } if u == url
+        )
+    });
     if !known {
         return Err(format!(
             "digest_source for '{url}' but that URL is not in source_accepted events"
         ));
     }
-    let already = events.iter().any(|e| matches!(
-        e,
-        SessionEvent::SourceDigested { url: u, .. } if u == url
-    ));
+    let already = events.iter().any(|e| {
+        matches!(
+            e,
+            SessionEvent::SourceDigested { url: u, .. } if u == url
+        )
+    });
     if already {
         return Err(format!("source_already_digested: {url}"));
     }
@@ -930,6 +1015,71 @@ fn digest_source(slug: &str, iteration: u32, url: &str, into_section: &str) -> R
     .map_err(|e| format!("append SourceDigested: {e}"))
 }
 
+struct FactCheckInput<'a> {
+    slug: &'a str,
+    iteration: u32,
+    claim: &'a str,
+    query: &'a str,
+    sources: &'a [String],
+    outcome: FactCheckOutcome,
+    into_section: &'a str,
+    note: Option<&'a str>,
+}
+
+fn fact_check(input: FactCheckInput<'_>) -> Result<(), String> {
+    let FactCheckInput {
+        slug,
+        iteration,
+        claim,
+        query,
+        sources,
+        outcome,
+        into_section,
+        note,
+    } = input;
+
+    if claim.trim().is_empty() || query.trim().is_empty() || sources.is_empty() {
+        return Err("fact_check_invalid: claim, query, and sources must be non-empty".into());
+    }
+
+    let events = log::read_all(slug).unwrap_or_default();
+    let accepted: HashSet<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::SourceAccepted { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .collect();
+    if let Some(missing) = sources.iter().find(|url| !accepted.contains(*url)) {
+        return Err(format!("fact_check_unknown_source: {missing}"));
+    }
+    let digested: HashSet<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            SessionEvent::SourceDigested { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .collect();
+    if let Some(undigested) = sources.iter().find(|url| !digested.contains(*url)) {
+        return Err(format!("fact_check_undigested_source: {undigested}"));
+    }
+
+    log::append(
+        slug,
+        &SessionEvent::FactChecked {
+            timestamp: Utc::now(),
+            iteration,
+            claim: claim.trim().to_string(),
+            query: query.trim().to_string(),
+            sources: sources.to_vec(),
+            outcome,
+            into_section: into_section.to_string(),
+            note: note.map(str::to_string),
+        },
+    )
+    .map_err(|e| format!("append FactChecked: {e}"))
+}
+
 fn run_add(research_bin: &Path, slug: &str, url: &str) -> Result<(), String> {
     let out = Command::new(research_bin)
         .args(["add", url, "--slug", slug, "--json"])
@@ -941,7 +1091,10 @@ fn run_add(research_bin: &Path, slug: &str, url: &str) -> Result<(), String> {
         Err(format!(
             "research add exit {}: {}",
             out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("")
+            String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .next()
+                .unwrap_or("")
         ))
     }
 }
@@ -973,7 +1126,10 @@ fn run_batch(
         Err(format!(
             "research batch exit {}: {}",
             out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("")
+            String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .next()
+                .unwrap_or("")
         ))
     }
 }
@@ -1101,8 +1257,7 @@ fn write_diagram(
     }
 
     let diagrams_dir = layout::session_dir(slug).join("diagrams");
-    std::fs::create_dir_all(&diagrams_dir)
-        .map_err(|e| format!("mkdir diagrams: {e}"))?;
+    std::fs::create_dir_all(&diagrams_dir).map_err(|e| format!("mkdir diagrams: {e}"))?;
     let target = diagrams_dir.join(path);
     std::fs::write(&target, svg).map_err(|e| format!("write svg: {e}"))?;
 
@@ -1255,7 +1410,10 @@ fn find_aside(md: &str) -> Option<std::ops::Range<usize>> {
     // Matches a line beginning with `> **aside:**`.
     let marker = "> **aside:**";
     let start = md.find(marker)?;
-    let line_end = md[start..].find('\n').map(|i| start + i).unwrap_or(md.len());
+    let line_end = md[start..]
+        .find('\n')
+        .map(|i| start + i)
+        .unwrap_or(md.len());
     Some(start..line_end)
 }
 
@@ -1280,9 +1438,7 @@ fn replace_range(s: &str, r: std::ops::Range<usize>, replacement: &str) -> Strin
 fn append_diagram_todo(slug: &str, name: &str, hint: &str) -> Result<(), String> {
     let path = layout::session_md(slug);
     let md = std::fs::read_to_string(&path).map_err(|e| format!("read session.md: {e}"))?;
-    let todo = format!(
-        "\n<!-- research-loop: diagram needed — {name} — {hint} -->\n"
-    );
+    let todo = format!("\n<!-- research-loop: diagram needed — {name} — {hint} -->\n");
     let mut new_md = md.clone();
     if !new_md.ends_with('\n') {
         new_md.push('\n');
@@ -1422,6 +1578,58 @@ mod tests {
     }
 
     #[test]
+    fn base_system_prompt_includes_grounding_guardrail() {
+        let prompt = base_system_prompt();
+        assert!(
+            prompt.contains("specific person, team, date, or number"),
+            "prompt must forbid unsupported concrete facts, got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains("digested source"),
+            "prompt must anchor concrete facts to digested sources, got:\n{prompt}"
+        );
+    }
+
+    #[test]
+    fn sports_system_prompt_includes_roster_source_guidance() {
+        let prompt = system_prompt_from_context(None, Some("sports"), true);
+        assert!(prompt.contains("https://www.nba.com/<team>/roster"));
+        assert!(prompt.contains("https://www.basketball-reference.com/teams/<TEAM>/<YEAR>.html"));
+        assert!(prompt.contains("https://www.espn.com/nba/team/roster/_/name/<abbr>/<team>"));
+        assert!(prompt.contains("fact_check"));
+        assert!(prompt.contains("accepted + digested source"));
+    }
+
+    #[test]
+    fn tech_system_prompt_omits_sports_roster_guidance() {
+        let prompt = system_prompt_from_context(None, Some("tech"), false);
+        assert!(prompt.contains("github.com/{owner}/{repo}"));
+        assert!(prompt.contains("arxiv.org/abs/{id}"));
+        assert!(!prompt.contains("https://www.nba.com/<team>/roster"));
+    }
+
+    #[test]
+    fn system_prompt_reads_sports_session_config() {
+        let prompt = system_prompt_from_context(
+            Some("Prefer official sources from SCHEMA.md".to_string()),
+            Some("sports"),
+            true,
+        );
+        assert!(prompt.contains("You drive a research CLI"));
+        assert!(prompt.contains("https://www.nba.com/<team>/roster"));
+        assert!(prompt.contains("Session-specific schema guidance"));
+        assert!(prompt.contains("Prefer official sources from SCHEMA.md"));
+    }
+
+    #[test]
+    fn system_prompt_missing_config_falls_back_to_base() {
+        let prompt = system_prompt("__missing_session_for_prompt_fallback__");
+        assert!(prompt.contains("GROUNDING CONTRACT"));
+        assert!(prompt.contains("specific person, team, date, or number"));
+        assert!(!prompt.contains("https://www.nba.com/<team>/roster"));
+    }
+
+    #[test]
     fn preserve_diagram_refs_keeps_existing_figure_when_overwrite_omits_it() {
         // tokio-v3 smoke regression: Claude rewrote `## 01 · WHY`
         // body, dropping `![control flow](diagrams/scheduler-flow.svg)`
@@ -1440,7 +1648,8 @@ More prose.
 ## 02 · HOW
 body
 ";
-        let new_body = "Rewritten prose, only the new figure.\n\n![lifecycle](diagrams/task-lifecycle.svg)\n";
+        let new_body =
+            "Rewritten prose, only the new figure.\n\n![lifecycle](diagrams/task-lifecycle.svg)\n";
         let out = preserve_diagram_refs(md, "## 01 · WHY", new_body);
         assert!(out.contains("Rewritten prose"));
         assert!(out.contains("task-lifecycle.svg"));

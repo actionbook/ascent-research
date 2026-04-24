@@ -2,14 +2,15 @@
 //! report.
 //!
 //! Post-processes the English body HTML produced by `markdown::render_body`.
-//! For each `<p>` that contains sentence-like content, calls Claude via
-//! cc-sdk to get a Chinese translation and injects a `<p class="tr-zh">`
-//! sibling immediately after it. The template's language toggle flips
-//! display based on `body.bilingual` class.
+//! For each `<p>` that contains sentence-like content, calls a configured
+//! LLM provider to get a Chinese translation and injects a
+//! `<p class="tr-zh">` sibling immediately after it. The template's
+//! language toggle flips display based on `body.bilingual` class.
 //!
-//! Requires the `provider-claude` feature at compile time. Without it,
-//! `inject_zh_translations` returns an error so the caller can degrade
-//! gracefully (keep monolingual output + log a warning).
+//! Requires at least one LLM provider feature (`provider-claude` or
+//! `provider-codex`) at compile time. Without it, `inject_zh_translations`
+//! returns an error so the caller can degrade gracefully (keep monolingual
+//! output + log a warning).
 //!
 //! Scope choices (deliberate MVP):
 //! - Translates only `<p>` elements — headings, lists, and figures are
@@ -21,7 +22,7 @@
 //!   is ~10× cheaper than one call per paragraph and tolerates modest
 //!   drift in paragraph count (falls back to monolingual on mismatch).
 
-// Helpers below are wired up only when `provider-claude` is compiled
+// Helpers below are wired up only when an LLM provider is compiled
 // in — that's when `inject_zh_translations` actually dispatches through
 // them. On default (and even `cargo test` without the feature) several
 // items are genuinely unreachable: `html_escape_text` / `system_prompt`
@@ -29,8 +30,11 @@
 // block, and the unit tests only exercise the parsing helpers.
 //
 // Rather than chase each item with a per-item cfg, silence dead_code
-// for the whole module whenever `provider-claude` is absent.
-#![cfg_attr(not(feature = "provider-claude"), allow(dead_code))]
+// for the whole module whenever no provider is present.
+#![cfg_attr(
+    not(any(feature = "provider-claude", feature = "provider-codex")),
+    allow(dead_code)
+)]
 
 use regex::Regex;
 use std::sync::OnceLock;
@@ -55,22 +59,20 @@ impl std::fmt::Display for BilingualError {
 /// return the rewritten HTML plus an optional note for the warnings log
 /// (e.g. when paragraph counts drift between input and translation).
 ///
-/// When the `provider-claude` feature is not compiled in, returns
+/// When no LLM provider feature is compiled in, returns
 /// `ProviderMissing` so the caller can skip translation and still render
 /// a monolingual report.
 pub fn inject_zh_translations(body_html: &str) -> Result<(String, Option<String>), BilingualError> {
-    #[cfg(not(feature = "provider-claude"))]
+    #[cfg(not(any(feature = "provider-claude", feature = "provider-codex")))]
     {
         let _ = body_html;
-        return Err(BilingualError::ProviderMissing(
-            "provider-claude feature not compiled in; rebuild with --features provider-claude"
-                .into(),
-        ));
+        Err(BilingualError::ProviderMissing(
+            "no bilingual provider compiled in; rebuild with --features provider-claude or provider-codex".into(),
+        ))
     }
-    #[cfg(feature = "provider-claude")]
+    #[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
     {
-        use crate::autoresearch::claude::ClaudeProvider;
-        use crate::autoresearch::provider::{AgentProvider, ProviderError};
+        use crate::autoresearch::provider::ProviderError;
 
         let spans = find_paragraph_spans(body_html);
         let english: Vec<(usize, String)> = spans
@@ -91,18 +93,34 @@ pub fn inject_zh_translations(body_html: &str) -> Result<(String, Option<String>
             return Err(BilingualError::NothingToTranslate);
         }
 
-        let provider = ClaudeProvider::new();
         let system = system_prompt();
         let user = user_prompt(&english);
 
-        let runtime = tokio::runtime::Runtime::new()
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .map_err(|e| BilingualError::ProviderCallFailed(format!("runtime: {e}")))?;
+        let provider_name = selected_provider_name()?;
         let response = runtime
-            .block_on(provider.ask(&system, &user))
+            .block_on(ask_provider(provider_name, &system, &user))
             .map_err(|e| match e {
                 ProviderError::NotAvailable(m) => BilingualError::ProviderMissing(m),
                 other => BilingualError::ProviderCallFailed(other.to_string()),
             })?;
+        if let Ok(path) = std::env::var("ASR_BILINGUAL_DEBUG_RESPONSE") {
+            let _ = std::fs::write(path, &response);
+        }
+        let trimmed_response = response.trim();
+        if trimmed_response.starts_with("Not logged in") {
+            return Err(BilingualError::ProviderMissing(format!(
+                "{provider_name} provider is not logged in; authenticate it before --bilingual"
+            )));
+        }
+        if trimmed_response.starts_with("Invalid API key") {
+            return Err(BilingualError::ProviderMissing(format!(
+                "{provider_name} provider has an invalid API key"
+            )));
+        }
 
         let translations = parse_translations(&response, english.len());
         let mut note: Option<String> = None;
@@ -114,7 +132,9 @@ pub fn inject_zh_translations(body_html: &str) -> Result<(String, Option<String>
             ));
         }
 
-        let mut out = String::with_capacity(body_html.len() + translations.iter().map(|s| s.len() + 32).sum::<usize>());
+        let mut out = String::with_capacity(
+            body_html.len() + translations.iter().map(|s| s.len() + 32).sum::<usize>(),
+        );
         let mut cursor = 0usize;
         let mut translation_index: std::collections::HashMap<usize, String> =
             std::collections::HashMap::new();
@@ -141,6 +161,97 @@ struct PSpan {
     outer_end: usize,
     inner_start: usize,
     inner_end: usize,
+}
+
+#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+fn selected_provider_name() -> Result<&'static str, BilingualError> {
+    let requested = std::env::var("ASR_BILINGUAL_PROVIDER")
+        .or_else(|_| std::env::var("ASCENT_RESEARCH_BILINGUAL_PROVIDER"))
+        .unwrap_or_else(|_| default_provider_name().to_string());
+    match requested.as_str() {
+        "claude" => {
+            #[cfg(feature = "provider-claude")]
+            {
+                Ok("claude")
+            }
+            #[cfg(not(feature = "provider-claude"))]
+            {
+                Err(BilingualError::ProviderMissing(
+                    "ASR_BILINGUAL_PROVIDER=claude requires --features provider-claude".into(),
+                ))
+            }
+        }
+        "codex" => {
+            #[cfg(feature = "provider-codex")]
+            {
+                Ok("codex")
+            }
+            #[cfg(not(feature = "provider-codex"))]
+            {
+                Err(BilingualError::ProviderMissing(
+                    "ASR_BILINGUAL_PROVIDER=codex requires --features provider-codex".into(),
+                ))
+            }
+        }
+        other => Err(BilingualError::ProviderMissing(format!(
+            "unknown ASR_BILINGUAL_PROVIDER={other}; expected claude or codex"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+fn default_provider_name() -> &'static str {
+    #[cfg(feature = "provider-claude")]
+    {
+        "claude"
+    }
+    #[cfg(all(not(feature = "provider-claude"), feature = "provider-codex"))]
+    {
+        "codex"
+    }
+}
+
+#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+async fn ask_provider(
+    name: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, crate::autoresearch::provider::ProviderError> {
+    use crate::autoresearch::provider::{AgentProvider, ProviderError};
+
+    match name {
+        "claude" => {
+            #[cfg(feature = "provider-claude")]
+            {
+                crate::autoresearch::claude::ClaudeProvider::new()
+                    .ask(system, user)
+                    .await
+            }
+            #[cfg(not(feature = "provider-claude"))]
+            {
+                Err(ProviderError::NotAvailable(
+                    "provider-claude feature not compiled in".into(),
+                ))
+            }
+        }
+        "codex" => {
+            #[cfg(feature = "provider-codex")]
+            {
+                crate::autoresearch::codex::CodexProvider::new()
+                    .ask(system, user)
+                    .await
+            }
+            #[cfg(not(feature = "provider-codex"))]
+            {
+                Err(ProviderError::NotAvailable(
+                    "provider-codex feature not compiled in".into(),
+                ))
+            }
+        }
+        other => Err(ProviderError::NotAvailable(format!(
+            "unknown bilingual provider: {other}"
+        ))),
+    }
 }
 
 fn find_paragraph_spans(html: &str) -> Vec<PSpan> {
@@ -210,7 +321,9 @@ format strictly: `1. <chinese>\\n2. <chinese>\\n...`"
 }
 
 fn user_prompt(english: &[(usize, String)]) -> String {
-    let mut out = String::from("Translate each paragraph below to Simplified Chinese (zh-CN). Keep the numbered ordering, one translation per line.\n\n");
+    let mut out = String::from(
+        "Translate each paragraph below to Simplified Chinese (zh-CN). Keep the numbered ordering, one translation per line.\n\n",
+    );
     for (rank, (_, text)) in english.iter().enumerate() {
         out.push_str(&format!("{}. {}\n\n", rank + 1, text));
     }
@@ -220,7 +333,8 @@ fn user_prompt(english: &[(usize, String)]) -> String {
 
 fn parse_translations(response: &str, expected: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(expected);
-    let line_re = Regex::new(r"^\s*(\d+)[\.\)]\s*(.*)$").expect("translation line regex");
+    let response = strip_code_fences(response);
+    let line_re = Regex::new(r"^\s*(\d+)[\.\)、．。]\s*(.*)$").expect("translation line regex");
     let mut pending_num: Option<usize> = None;
     let mut pending_buf = String::new();
     let flush = |out: &mut Vec<String>, buf: &mut String| {
@@ -252,7 +366,46 @@ fn parse_translations(response: &str, expected: usize) -> Vec<String> {
     if pending_num.is_some() {
         flush(&mut out, &mut pending_buf);
     }
+    if out.is_empty() {
+        out = parse_json_string_array(&response).unwrap_or_default();
+    }
+    if out.is_empty() {
+        let lines: Vec<String> = response
+            .lines()
+            .map(|line| {
+                line.trim()
+                    .trim_start_matches('-')
+                    .trim_start_matches('*')
+                    .trim()
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect();
+        if lines.len() == expected {
+            out = lines;
+        }
+    }
+    if out.len() > expected {
+        out.truncate(expected);
+    }
     out
+}
+
+fn strip_code_fences(response: &str) -> String {
+    response
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_json_string_array(response: &str) -> Option<Vec<String>> {
+    let start = response.find('[')?;
+    let end = response.rfind(']')?;
+    if end < start {
+        return None;
+    }
+    serde_json::from_str::<Vec<String>>(&response[start..=end]).ok()
 }
 
 #[cfg(test)]
@@ -310,5 +463,28 @@ mod tests {
         let response = "1) 一。\n2) 二。";
         let parsed = parse_translations(response, 2);
         assert_eq!(parsed.len(), 2);
+    }
+
+    #[test]
+    fn parse_translations_tolerates_chinese_numbering_punctuation() {
+        let response = "1、第一段。\n2．第二段。\n3。第三段。";
+        let parsed = parse_translations(response, 3);
+        assert_eq!(parsed, vec!["第一段。", "第二段。", "第三段。"]);
+    }
+
+    #[test]
+    fn parse_translations_tolerates_json_array() {
+        let response = r#"```json
+["第一段。", "第二段。"]
+```"#;
+        let parsed = parse_translations(response, 2);
+        assert_eq!(parsed, vec!["第一段。", "第二段。"]);
+    }
+
+    #[test]
+    fn parse_translations_tolerates_plain_line_output_when_counts_match() {
+        let response = "第一段。\n第二段。";
+        let parsed = parse_translations(response, 2);
+        assert_eq!(parsed, vec!["第一段。", "第二段。"]);
     }
 }

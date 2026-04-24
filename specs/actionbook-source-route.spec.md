@@ -6,7 +6,12 @@ estimate: 1d
 depends: []
 status: implemented
 implementation: actionbook commit 75e157f9; SKILL.md updated 2026-04-18
+superseded_for_ascent_research_by: research-route-toml-presets
 ---
+
+> Historical note: this is the earlier `actionbook source route` contract.
+> `ascent-research` v0.3 does not use this as source of truth; it uses packaged
+> TOML presets under `packages/research/presets/`.
 
 ## 意图
 

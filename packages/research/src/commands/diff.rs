@@ -19,7 +19,7 @@ use std::fs;
 use crate::output::Envelope;
 use crate::session::{
     active, config,
-    event::{read_events, SessionEvent},
+    event::{SessionEvent, read_events},
     layout, md_parser,
 };
 

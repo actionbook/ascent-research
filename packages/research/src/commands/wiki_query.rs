@@ -21,12 +21,12 @@ use std::collections::{HashMap, HashSet};
 use chrono::Utc;
 use serde_json::json;
 
-#[cfg(feature = "autoresearch")]
-use crate::autoresearch::provider::{AgentProvider, FakeProvider, ProviderError};
 #[cfg(all(feature = "autoresearch", feature = "provider-claude"))]
 use crate::autoresearch::claude::ClaudeProvider;
 #[cfg(all(feature = "autoresearch", feature = "provider-codex"))]
 use crate::autoresearch::codex::CodexProvider;
+#[cfg(feature = "autoresearch")]
+use crate::autoresearch::provider::{AgentProvider, FakeProvider, ProviderError};
 
 use crate::output::Envelope;
 use crate::session::{active, config, layout, wiki};
@@ -122,8 +122,12 @@ pub fn run(
                     .with_context(json!({ "session": slug }));
             }
             Err(ProviderError::EmptyResponse) => {
-                return Envelope::fail(CMD, "PROVIDER_EMPTY_RESPONSE", "provider returned empty text")
-                    .with_context(json!({ "session": slug }));
+                return Envelope::fail(
+                    CMD,
+                    "PROVIDER_EMPTY_RESPONSE",
+                    "provider returned empty text",
+                )
+                .with_context(json!({ "session": slug }));
             }
         };
 
@@ -178,6 +182,7 @@ pub fn run(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn resolve_slug(slug_arg: Option<&str>) -> Result<String, Envelope> {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -193,18 +198,22 @@ fn resolve_slug(slug_arg: Option<&str>) -> Result<String, Envelope> {
         },
     };
     if !config::exists(&slug) {
-        return Err(Envelope::fail(CMD, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
-            .with_context(json!({ "session": slug })));
+        return Err(
+            Envelope::fail(CMD, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
+                .with_context(json!({ "session": slug })),
+        );
     }
     Ok(slug)
 }
 
 #[cfg(feature = "autoresearch")]
+#[allow(clippy::result_large_err)]
 fn make_provider(provider_name: &str) -> Result<Box<dyn AgentProvider>, Envelope> {
     match provider_name {
         "fake" => {
-            let resp = std::env::var("ACTIONBOOK_FAKE_QUERY_RESPONSE")
-                .unwrap_or_else(|_| "FAKE-ANSWER (no ACTIONBOOK_FAKE_QUERY_RESPONSE env)".to_string());
+            let resp = std::env::var("ACTIONBOOK_FAKE_QUERY_RESPONSE").unwrap_or_else(|_| {
+                "FAKE-ANSWER (no ACTIONBOOK_FAKE_QUERY_RESPONSE env)".to_string()
+            });
             Ok(Box::new(FakeProvider::new([resp])))
         }
         #[cfg(feature = "provider-claude")]
@@ -317,15 +326,19 @@ fn extract_wiki_links(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 3 < bytes.len() {
-        if &bytes[i..i + 2] == b"[[" {
-            if let Some(end) = body[i + 2..].find("]]") {
-                let slug = &body[i + 2..i + 2 + end];
-                if !slug.is_empty() && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') {
-                    out.push(slug.to_string());
-                }
-                i += 2 + end + 2;
-                continue;
+        if &bytes[i..i + 2] == b"[["
+            && let Some(end) = body[i + 2..].find("]]")
+        {
+            let slug = &body[i + 2..i + 2 + end];
+            if !slug.is_empty()
+                && slug
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                out.push(slug.to_string());
             }
+            i += 2 + end + 2;
+            continue;
         }
         i += 1;
     }
@@ -334,8 +347,12 @@ fn extract_wiki_links(body: &str) -> Vec<String> {
 
 fn build_system_prompt(format: &str) -> String {
     let shape = match format {
-        "comparison" => "- Structure the answer as a comparison table or parallel-bullet list when two+ things are being contrasted.",
-        "table" => "- Prefer a markdown table when answering. Put the citations in a trailing paragraph.",
+        "comparison" => {
+            "- Structure the answer as a comparison table or parallel-bullet list when two+ things are being contrasted."
+        }
+        "table" => {
+            "- Prefer a markdown table when answering. Put the citations in a trailing paragraph."
+        }
         _ => "- Write 1–4 short paragraphs of prose.",
     };
     format!(
@@ -379,12 +396,7 @@ fn build_user_prompt(
     out
 }
 
-fn render_save_page(
-    save_slug: &str,
-    question: &str,
-    cited: &[String],
-    answer: &str,
-) -> String {
+fn render_save_page(save_slug: &str, question: &str, cited: &[String], answer: &str) -> String {
     let today = Utc::now().format("%Y-%m-%d");
     // sources list references the wiki pages that the answer drew
     // from; the free-text answer may also cite URLs directly, which
@@ -431,7 +443,11 @@ mod tests {
 
     #[test]
     fn pick_relevant_ranks_slug_name_matches_higher_than_body() {
-        let pages = vec!["scheduler".to_string(), "task-system".to_string(), "misc".to_string()];
+        let pages = vec![
+            "scheduler".to_string(),
+            "task-system".to_string(),
+            "misc".to_string(),
+        ];
         let mut bodies = HashMap::new();
         bodies.insert("scheduler".into(), "body body body".into());
         bodies.insert("task-system".into(), "mentions scheduler here once".into());
@@ -442,7 +458,11 @@ mod tests {
 
     #[test]
     fn pick_relevant_includes_bfs_hop_of_top_seed() {
-        let pages = vec!["scheduler".to_string(), "worker".to_string(), "idle".to_string()];
+        let pages = vec![
+            "scheduler".to_string(),
+            "worker".to_string(),
+            "idle".to_string(),
+        ];
         let mut bodies = HashMap::new();
         bodies.insert(
             "scheduler".into(),
@@ -493,4 +513,3 @@ mod tests {
         assert!(build_system_prompt("table").contains("markdown table"));
     }
 }
-

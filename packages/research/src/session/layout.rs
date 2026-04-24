@@ -1,8 +1,10 @@
 //! Canonical on-disk layout constants + session-path helpers.
 //!
-//! All paths are rooted at `~/.actionbook/research/`. No I/O here — this
-//! module only answers "where does X live?" Questions like "does the file
-//! exist?" belong to callers.
+//! All v0.3+ writes are rooted at `~/.actionbook/ascent-research/` (the
+//! legacy `~/.actionbook/research/` tree is read-only for compatibility,
+//! see `legacy_research_root`). No I/O here — this module only answers
+//! "where does X live?" Questions like "does the file exist?" belong to
+//! callers.
 //!
 //! Exported constants match the `research-cli-foundation.spec.md` contract
 //! exactly — do not change names without updating the spec.
@@ -20,10 +22,10 @@ use std::path::{Path, PathBuf};
 /// there after the rename, so upgraded users stop accreting in the
 /// old path the moment they run any v0.3 command.
 pub fn research_root() -> PathBuf {
-    if let Ok(override_path) = std::env::var("ACTIONBOOK_RESEARCH_HOME") {
-        if !override_path.is_empty() {
-            return PathBuf::from(override_path);
-        }
+    if let Ok(override_path) = std::env::var("ACTIONBOOK_RESEARCH_HOME")
+        && !override_path.is_empty()
+    {
+        return PathBuf::from(override_path);
     }
     dirs::home_dir()
         .expect("home_dir must be resolvable on supported platforms")
@@ -40,9 +42,7 @@ pub fn legacy_research_root() -> Option<PathBuf> {
     if std::env::var("ACTIONBOOK_RESEARCH_HOME").is_ok() {
         return None;
     }
-    let legacy = dirs::home_dir()?
-        .join(".actionbook")
-        .join("research");
+    let legacy = dirs::home_dir()?.join(".actionbook").join("research");
     if legacy.exists() { Some(legacy) } else { None }
 }
 
@@ -55,10 +55,10 @@ pub fn root_for_slug(slug: &str) -> PathBuf {
     if canonical.join(slug).exists() {
         return canonical;
     }
-    if let Some(legacy) = legacy_research_root() {
-        if legacy.join(slug).exists() {
-            return legacy;
-        }
+    if let Some(legacy) = legacy_research_root()
+        && legacy.join(slug).exists()
+    {
+        return legacy;
     }
     canonical
 }
@@ -97,7 +97,7 @@ pub fn session_report_html(slug: &str) -> PathBuf {
     session_dir(slug).join("report.html")
 }
 
-/// Wiki page root — `~/.actionbook/research/<slug>/wiki/`. Contains
+/// Wiki page root — `<research_root>/<slug>/wiki/`. Contains
 /// per-entity / per-concept / per-source markdown pages the agent
 /// creates through `WriteWikiPage` / `AppendWikiPage`.
 pub fn session_wiki_dir(slug: &str) -> PathBuf {
@@ -157,7 +157,9 @@ pub enum MarkerError {
 /// Returns `Ok(Range)` where `md[range]` is the region the CLI may rewrite,
 /// or `MarkerError` if either marker is missing / out of order.
 pub fn locate_sources_block(md: &str) -> Result<Range<usize>, MarkerError> {
-    let start = md.find(SOURCES_START_MARKER).ok_or(MarkerError::MissingStart)?;
+    let start = md
+        .find(SOURCES_START_MARKER)
+        .ok_or(MarkerError::MissingStart)?;
     let after_start = start + SOURCES_START_MARKER.len();
     let end = md[after_start..]
         .find(SOURCES_END_MARKER)
@@ -188,7 +190,8 @@ mod tests {
 
     #[test]
     fn locate_sources_block_happy() {
-        let md = "## Sources\n<!-- research:sources-start -->\nOLD\n<!-- research:sources-end -->\n";
+        let md =
+            "## Sources\n<!-- research:sources-start -->\nOLD\n<!-- research:sources-end -->\n";
         let r = locate_sources_block(md).unwrap();
         assert_eq!(&md[r], "\nOLD\n");
     }

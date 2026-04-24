@@ -374,6 +374,10 @@
       background: var(--color-ink);
       color: var(--color-paper);
     }
+    .lang-switch button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
     .tr-zh {
       display: none;
       color: var(--color-muted);
@@ -392,9 +396,7 @@
   </style>
 </head>
 <body>
-  <div class="lang-switch" role="group" aria-label="language toggle">
-    <button type="button" data-mode="en" class="active" onclick="document.body.classList.remove('bilingual'); this.classList.add('active'); this.nextElementSibling.classList.remove('active');">EN</button><button type="button" data-mode="zh" onclick="document.body.classList.add('bilingual'); this.classList.add('active'); this.previousElementSibling.classList.remove('active');">中文</button>
-  </div>
+  {{LANG_SWITCH_HTML}}
   <div class="frame">
 
     <p class="eyebrow">Research report</p>

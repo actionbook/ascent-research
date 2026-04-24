@@ -1,0 +1,63 @@
+name = "sports"
+description = "Sports/current facts — official roster pages + Basketball-Reference + ESPN"
+
+[[rule]]
+kind = "nba-team-roster"
+host = "www.nba.com"
+path_segments = ["{team}", "roster"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "nba-news-article"
+host = "www.nba.com"
+path_segments = ["news", "{...article}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "nba-video-page"
+host = "www.nba.com"
+path_segments = ["watch", "video", "{...video}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "basketball-reference-team-season"
+host = "www.basketball-reference.com"
+path_segments = ["teams", "{team}", "{year_html}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "basketball-reference-player"
+host = "www.basketball-reference.com"
+path_segments = ["players", "{letter}", "{player_html}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "espn-nba-team-roster"
+host = "www.espn.com"
+path_segments = ["nba", "team", "roster", "_", "name", "{abbr}", "{...team}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "espn-nba-team-schedule"
+host = "www.espn.com"
+path_segments = ["nba", "team", "schedule", "_", "name", "{abbr}", "{...team}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "espn-nba-team-schedule"
+host = "www.espn.com"
+path_segments = ["nba", "team", "schedule", "_", "name", "{abbr}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[fallback]
+executor = "browser"
+kind = "sports-browser-fallback"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''

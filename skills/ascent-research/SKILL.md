@@ -9,6 +9,106 @@ force_tool_turns: 15
 
 Build reproducible, figure-rich research reports with a persistent per-session wiki. One CLI, three input modes (HTTP API / browser fallback / local file tree), three output surfaces (narrative report / entity wiki / event log), autonomous loop optional.
 
+## Installation (MANDATORY — run before any playbook)
+
+Three binaries must be on PATH: `ascent-research` (the CLI itself), `postagent` (HTTP ingest — npm), `actionbook` (browser fallback — npm).
+
+```bash
+# 1. The ascent-research CLI (Rust). `autoresearch` is a default feature
+#    so `loop` works out of the box; add LLM providers for loop/wiki/bilingual.
+cargo install ascent-research --features "provider-claude provider-codex"
+
+# 2. Node.js dependency tools
+npm install -g postagent @actionbookdev/cli
+```
+
+**Doctor check — run this FIRST in every new session:**
+
+```bash
+ascent-research --json doctor || { echo "INSTALL_REQUIRED"; exit 1; }
+```
+
+If the doctor check exits non-zero, **STOP and run the install block above**. Do NOT narrate the workflow in chat as a substitute — the CLI is the only thing that actually produces `report.html`.
+
+For any playbook that will fetch online sources through `add`, `batch`, or `route`, run tool smoke as well:
+
+```bash
+ascent-research --json doctor --tool-smoke
+```
+
+If a required tool-smoke check fails, **STOP** and surface the failing tool check. Optional warnings such as `postagent_public_dry_run` should be treated as routing guidance: prefer browser or local ingest if public postagent fetches are not accepted by the installed postagent contract.
+
+For any playbook that will call `loop`, `wiki query`, or `synthesize --bilingual`, also run a live provider smoke check first:
+
+```bash
+ascent-research --json doctor --provider-smoke --provider codex
+# or, if you explicitly want Claude:
+ascent-research --json doctor --provider-smoke --provider claude
+```
+
+If provider smoke fails, **STOP** and surface the failing provider check. Do not start the research loop or bilingual synthesis until the provider is healthy.
+
+**Data home:** all sessions, user preset overrides, wiki pages, and rendered reports live under `~/.actionbook/ascent-research/`. Override with `ACTIONBOOK_RESEARCH_HOME` for sandboxing. Upgraders from v0.2: the legacy `~/.actionbook/research/` tree is read-only — new writes land in the v0.3 canonical root.
+
+## Mandatory Tail (MANDATORY — do not stop at `loop`)
+
+`ascent-research loop` does **NOT** render `report.html`. Before you declare the task done, you MUST:
+
+```bash
+ascent-research coverage <slug>
+ascent-research synthesize <slug> [--bilingual] [--open]
+ascent-research --json audit <slug>
+```
+
+Rules:
+
+- Always run `coverage` after `loop` (or after manual `add` / `write` work) and inspect `report_ready`.
+- If `report_ready=true`, you MUST run `synthesize` before replying.
+- If the user asks for Chinese, bilingual output, or 中英文 output, you MUST run `synthesize <slug> --bilingual`; plain `synthesize` is English-only.
+- If `--bilingual` reports `bilingual_skipped`, do NOT claim Chinese output is complete. Fix the provider and rerun `synthesize <slug> --bilingual`.
+- After `synthesize`, run `audit` and inspect `audit_status`.
+- In the final reply, include the exact `<session>/report.html` path and `audit_status`.
+- If `report_ready=false`, do NOT claim the report is complete. Surface the blockers from `report_ready_blockers` and keep working or ask the user what to relax.
+- If `audit_status=incomplete`, do NOT claim the session is验收-complete. Surface `audit_blockers` and keep working or ask the user what to relax.
+
+Chinese/bilingual generation:
+
+```bash
+# Default translator is Claude when built with provider-claude.
+ascent-research synthesize <slug> --bilingual --open
+
+# If Claude auth/API key is unavailable but the binary was built with provider-codex:
+ASR_BILINGUAL_PROVIDER=codex ascent-research synthesize <slug> --bilingual --open
+```
+
+`--bilingual` produces an English/中文 toggle in `report.html` by injecting `<p class="tr-zh">` siblings. Without `--bilingual`, the report intentionally has no Chinese paragraphs.
+
+## Dynamic Fact Topics Require Fact Check
+
+For live, sports, news, current roster, current price, latest version, market, legal, medical, financial, or other time-sensitive factual research, create the session with `--tag fact-check`.
+
+```bash
+ascent-research new "<topic>" --slug <slug> --preset tech --tag fact-check
+```
+
+For sports/current-roster tasks, prefer the sports preset and seed at least one roster source URL from an official roster page, Basketball-Reference team season page, or ESPN roster page before synthesis:
+
+```bash
+ascent-research new "<topic>" --slug <slug> --preset sports --tag fact-check
+ascent-research add "https://www.nba.com/<team>/roster" --slug <slug>
+ascent-research add "https://www.basketball-reference.com/teams/<TEAM>/<YEAR>.html" --slug <slug>
+```
+
+When `--tag fact-check` is present, the loop must emit `fact_check` actions for concrete person, team, date, number, price, roster, standing, release version, or current-status claims before the final report depends on them. If evidence is stale or conflicting, emit `fact_check` with `outcome:"uncertain"` and continue fetching instead of writing a confident assertion.
+
+Before final synthesis on these sessions, run:
+
+```bash
+ascent-research coverage <slug> --json
+```
+
+Verify `fact_check_required=true` and `fact_checks_total >= 1`. If `report_ready_blockers` contains `fact_checks_total` or `fact_check_invalid_sources`, do NOT run `synthesize`; continue fetching accepted sources and emitting `fact_check` actions.
+
 ## Mental Model
 
 ```
@@ -98,7 +198,7 @@ ascent-research loop [<slug>] --provider {fake|claude|codex} [--iterations N]
 - `claude` provider uses `cc-sdk` (requires `--features provider-claude` at build time).
 - `codex` provider spawns `codex app-server` (requires `--features provider-codex`).
 - Loop reads `SCHEMA.md` each turn; user edits via `schema edit` take effect on the next iteration.
-- Action types the loop accepts: `write_plan`, `write_overview`, `write_aside`, `write_section`, `write_diagram`, `note_diagram_needed`, `digest_source`, `add`, `batch`, `write_wiki_page`, `append_wiki_page`.
+- Action types the loop accepts: `write_plan`, `write_overview`, `write_aside`, `write_section`, `write_diagram`, `note_diagram_needed`, `digest_source`, `fact_check`, `add`, `batch`, `write_wiki_page`, `append_wiki_page`.
 - Termination reasons: `report_ready`, `iterations_exhausted`, `max_actions_exhausted`, `provider_done`, `provider_unavailable`, `diverged` (same coverage signature 3 turns in a row).
 
 ### User-editable loop guidance (v3)
@@ -144,7 +244,7 @@ ascent-research diff            [<slug>] [--unused-only]
 - `synthesize` is the full path: renders `report.json` + inline-SVG + wiki TOC + sources list + optional bilingual (`--bilingual` calls Claude to inject `<p class="tr-zh">` siblings).
 - `report --format brief-md` dumps a lean markdown digest — useful for PR descriptions or quick sharing.
 - `series <tag>` renders an HTML index for every session carrying that tag.
-- `coverage` returns metrics + `report_ready_blockers` (array of human-readable reasons). If `report_ready: true`, the session is done.
+- `coverage` returns metrics + `report_ready_blockers` (array of human-readable reasons). If `report_ready: true`, the session is done. For `--tag fact-check` sessions, inspect `fact_check_required`, `fact_checks_total`, and `fact_check_invalid_sources`.
 - `diff` surfaces two sets: `unused` (accepted but never cited) and `hallucinated` (cited URLs that weren't accepted). `--unused-only` trims to the first set.
 
 ### Global flags (apply to every command)
@@ -284,6 +384,7 @@ These rules are encoded in `autoresearch/executor.rs` and surfaced to the agent 
 
 - **First-iteration contract.** A fresh session accepts only `write_plan`. Other actions are rejected with `plan_required`.
 - **Every accepted source must be digested.** `sources_unused > 0` is a `report_ready` blocker. The agent cannot skip a URL the user added.
+- **Dynamic facts need explicit fact checks.** Sessions tagged `fact-check` require at least one `FactChecked` event. Use `fact_check` for live/sports/news/current roster/current price/latest-version claims and keep working while `fact_checks_total` or `fact_check_invalid_sources` appears in blockers.
 - **Wiki-first for durable entities.** Source summaries, recurring concepts, library components → `write_wiki_page`. Numbered sections cite `[[slug]]` pages.
 - **Figure-rich contract.** Target ≥ 1 SVG per numbered section. Every `![](diagrams/x.svg)` requires a matching `write_diagram` same-or-earlier turn; every `write_diagram` should have a body reference. The user prompt nags about unresolved references and orphan SVG files at the top of each turn.
 - **`write_section` preserves figures.** If the current section body references `![](diagrams/x.svg)` and your new body omits it, the CLI re-appends the reference automatically — agents never silently orphan figures even if they try.
@@ -326,7 +427,7 @@ These rules are encoded in `autoresearch/executor.rs` and surfaced to the agent 
 | `PATH_NOT_FOUND` | `add-local` path missing | Check `~` expansion, use absolute path |
 | `WALK_FAILED` | Dir walk error | Usually permissions; try `ls -la` |
 | `SMELL_REJECTED` | Fetched body failed quality gate | See `sources --rejected` for reason; try `--readable` for browser fetches |
-| `PROVIDER_NOT_AVAILABLE` | Build lacks LLM feature | `cargo build --features "autoresearch provider-claude"` |
+| `PROVIDER_NOT_AVAILABLE` | Build lacks LLM feature | `cargo build --features "autoresearch provider-claude provider-codex"` |
 | `PROVIDER_CALL_FAILED` | LLM call reached the wire but errored | Retry or check auth / rate limit |
 | `WIKI_EMPTY` | `wiki query` with no pages | Run `loop` first |
 | `WIKI_PAGE_NOT_FOUND` | Bad slug on `wiki show/rm` | `wiki list` |
@@ -346,7 +447,7 @@ cargo build -p research --release
 cargo build -p research --release --features autoresearch
 
 # Full for production runs with real Claude
-cargo build -p research --release --features "autoresearch provider-claude"
+cargo build -p research --release --features "autoresearch provider-claude provider-codex"
 
 # Or Codex
 cargo build -p research --release --features "autoresearch provider-codex"

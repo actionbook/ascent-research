@@ -15,6 +15,7 @@ use std::io::IsTerminal;
 use std::process::Command;
 use std::time::Instant;
 
+use crate::commands::coverage;
 use crate::output::Envelope;
 use crate::report::brief_md::{self, BriefInput};
 use crate::report::markdown::{self, RenderError};
@@ -137,6 +138,10 @@ pub fn run(
         }
     };
 
+    if let Some(env) = report_ready_preflight(&slug) {
+        return env;
+    }
+
     // Phase C: build Sources section from session.jsonl (authoritative fact
     // stream), not from the session.md sources block (human-readable cache).
     let sources_section = sources::build_from_jsonl(&layout::session_jsonl(&slug));
@@ -209,6 +214,46 @@ pub fn run(
         }),
     )
     .with_context(json!({ "session": slug }))
+}
+
+fn report_ready_preflight(slug: &str) -> Option<Envelope> {
+    let coverage = coverage::run(Some(slug));
+    if !coverage.ok {
+        let (reason, details) = if let Some(err) = coverage.error {
+            (
+                format!("coverage preflight failed: {}", err.message),
+                err.details,
+            )
+        } else {
+            (
+                "coverage preflight failed".to_string(),
+                serde_json::Value::Null,
+            )
+        };
+        let mut env =
+            Envelope::fail(CMD, "IO_ERROR", reason).with_context(json!({ "session": slug }));
+        if !details.is_null() {
+            env = env.with_details(details);
+        }
+        return Some(env);
+    }
+
+    if coverage.data["report_ready"] == json!(true) {
+        return None;
+    }
+
+    Some(
+        Envelope::fail(
+            CMD,
+            "REPORT_NOT_READY",
+            "session does not satisfy `research coverage` gates — fix blockers and retry",
+        )
+        .with_context(json!({ "session": slug }))
+        .with_details(json!({
+            "report_ready": coverage.data["report_ready"].clone(),
+            "report_ready_blockers": coverage.data["report_ready_blockers"].clone(),
+        })),
+    )
 }
 
 /// Render `--format brief-md`. Shares Overview gate + slug resolution with

@@ -21,7 +21,7 @@ use chrono::Utc;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::fs;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
@@ -30,7 +30,7 @@ use crate::output::Envelope;
 use crate::route::{self, Executor as RouteExecutor};
 use crate::session::{
     active, config,
-    event::{RejectReason, RouteDecision, SessionEvent},
+    event::{RejectReason, RouteDecision, SessionEvent, ToolCallStatus},
     layout, log, sources_block,
 };
 
@@ -39,6 +39,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_CONCURRENCY: usize = 4;
 const MAX_CONCURRENCY: usize = 16;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     urls: &[String],
     slug_arg: Option<&str>,
@@ -55,8 +56,7 @@ pub fn run(
 
     let concurrency = concurrency_arg
         .unwrap_or(DEFAULT_CONCURRENCY)
-        .max(1)
-        .min(MAX_CONCURRENCY);
+        .clamp(1, MAX_CONCURRENCY);
     let timeout_ms = timeout_ms_arg.unwrap_or(DEFAULT_TIMEOUT_MS);
 
     let smell_cfg = match super::add::parse_smell_config(min_bytes_arg, on_short_body_arg) {
@@ -194,6 +194,21 @@ pub fn run(
             loop {
                 let next = { q.lock().unwrap().pop_front() };
                 let Some(job) = next else { break };
+                let call_id = format!("fetch-{}", job.raw_n);
+                let _ = log::append(
+                    &slug_owned,
+                    &SessionEvent::ToolCallStarted {
+                        timestamp: Utc::now(),
+                        call_id: call_id.clone(),
+                        hand: hand_name(&job.decision.executor).into(),
+                        tool: tool_name(&job.decision.executor).into(),
+                        input_summary: format!(
+                            "url={} kind={} readable={}",
+                            job.url, job.kind, job.readable
+                        ),
+                        note: None,
+                    },
+                );
                 let fetch_start = Instant::now();
                 let (raw_bytes, outcome, executor_str) = fetch::execute(
                     &job.decision,
@@ -206,6 +221,7 @@ pub fn run(
                 );
                 let _ = tx.send(FetchResult {
                     job,
+                    call_id,
                     raw_bytes,
                     outcome,
                     executor_str,
@@ -225,7 +241,14 @@ pub fn run(
     // ── Phase 3: persist (serial) ──────────────────────────────────────────
     let mut results: Vec<PerUrl> = pre_skipped;
     while let Ok(res) = rx.recv() {
-        let FetchResult { job, raw_bytes, outcome, executor_str, duration_ms } = res;
+        let FetchResult {
+            job,
+            call_id,
+            raw_bytes,
+            outcome,
+            executor_str,
+            duration_ms,
+        } = res;
         let base = format!("{}-{}-{}", job.raw_n, job.kind, sanitize(&job.host));
 
         if outcome.accepted {
@@ -235,6 +258,27 @@ pub fn run(
                 continue;
             }
             let trust = trust_score(job.executor, job.readable, outcome.bytes);
+            let completed = SessionEvent::ToolCallCompleted {
+                timestamp: Utc::now(),
+                call_id,
+                status: ToolCallStatus::Ok,
+                duration_ms,
+                output_summary: output_summary(
+                    outcome.bytes,
+                    outcome.observed_bytes,
+                    &outcome.warnings,
+                ),
+                artifact_refs: vec![rel_path(&raw_path)],
+                error_code: None,
+                note: None,
+            };
+            if let Err(e) = log::append(&slug, &completed) {
+                results.push(PerUrl::failed(
+                    &job.url,
+                    &format!("append tool_call_completed: {e}"),
+                ));
+                continue;
+            }
             let accepted_ev = SessionEvent::SourceAccepted {
                 timestamp: Utc::now(),
                 url: job.url.clone(),
@@ -262,6 +306,26 @@ pub fn run(
             let rejected_path = raw_dir.join(format!("{base}.rejected.json"));
             let _ = fs::write(&rejected_path, &raw_bytes);
             let reason = outcome.reject_reason.unwrap_or(RejectReason::FetchFailed);
+            let fetch_success = !matches!(reason, RejectReason::FetchFailed);
+            let completed = SessionEvent::ToolCallCompleted {
+                timestamp: Utc::now(),
+                call_id,
+                status: if fetch_success {
+                    ToolCallStatus::Ok
+                } else {
+                    ToolCallStatus::Error
+                },
+                duration_ms,
+                output_summary: output_summary(
+                    outcome.bytes,
+                    outcome.observed_bytes,
+                    &outcome.warnings,
+                ),
+                artifact_refs: vec![rel_path(&rejected_path)],
+                error_code: (!fetch_success).then(|| reason_str(reason).to_string()),
+                note: None,
+            };
+            let _ = log::append(&slug, &completed);
             let rejected_ev = SessionEvent::SourceRejected {
                 timestamp: Utc::now(),
                 url: job.url.clone(),
@@ -324,6 +388,7 @@ struct Job {
 
 struct FetchResult {
     job: Job,
+    call_id: String,
     raw_bytes: Vec<u8>,
     outcome: FetchOutcome,
     executor_str: String,
@@ -456,7 +521,9 @@ fn looks_like_article(url: &str) -> bool {
 }
 
 fn extract_host(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let authority = rest.split('/').next()?;
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     Some(host.split(':').next()?.to_ascii_lowercase())
@@ -464,7 +531,13 @@ fn extract_host(url: &str) -> Option<String> {
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -501,6 +574,31 @@ fn reason_str(r: RejectReason) -> &'static str {
     }
 }
 
+fn hand_name(executor: &str) -> &'static str {
+    match executor {
+        "postagent" => "postagent",
+        "browser" => "actionbook",
+        "local" => "local",
+        _ => "research-cli",
+    }
+}
+
+fn tool_name(executor: &str) -> &'static str {
+    match executor {
+        "postagent" => "postagent send",
+        "browser" => "actionbook browser",
+        "local" => "local read_file",
+        _ => "research-cli",
+    }
+}
+
+fn output_summary(bytes: u64, observed_bytes: u64, warnings: &[String]) -> String {
+    format!(
+        "bytes={bytes} observed_bytes={observed_bytes} warnings={}",
+        warnings.len()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,8 +612,14 @@ mod tests {
 
     #[test]
     fn extract_host_strips_scheme_and_port() {
-        assert_eq!(extract_host("https://www.reddit.com/r/x").unwrap(), "www.reddit.com");
-        assert_eq!(extract_host("http://localhost:8080/x").unwrap(), "localhost");
+        assert_eq!(
+            extract_host("https://www.reddit.com/r/x").unwrap(),
+            "www.reddit.com"
+        );
+        assert_eq!(
+            extract_host("http://localhost:8080/x").unwrap(),
+            "localhost"
+        );
     }
 
     #[test]

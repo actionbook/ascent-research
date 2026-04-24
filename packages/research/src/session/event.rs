@@ -1,6 +1,6 @@
 //! Canonical `SessionEvent` schema — the single source of truth referenced
-//! by foundation spec. 10 variants, each carries base fields
-//! (`timestamp`, optional `note`) plus variant-specific fields.
+//! by foundation spec. Each variant carries base fields (`timestamp`,
+//! optional `note`) plus variant-specific fields.
 //!
 //! `RejectReason` is the 5-value enum for rejected source attempts.
 //!
@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectReason {
@@ -20,6 +24,21 @@ pub enum RejectReason {
     EmptyContent,
     ApiError,
     Duplicate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallStatus {
+    Ok,
+    Error,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactCheckOutcome {
+    Supported,
+    Refuted,
+    Uncertain,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,8 +86,37 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    ToolCallStarted {
+        timestamp: DateTime<Utc>,
+        call_id: String,
+        hand: String,
+        tool: String,
+        input_summary: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    ToolCallCompleted {
+        timestamp: DateTime<Utc>,
+        call_id: String,
+        status: ToolCallStatus,
+        duration_ms: u64,
+        output_summary: String,
+        artifact_refs: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     SynthesizeStarted {
         timestamp: DateTime<Utc>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        no_render: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        open: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        bilingual: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bilingual_provider: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
@@ -148,6 +196,17 @@ pub enum SessionEvent {
         timestamp: DateTime<Utc>,
         iteration: u32,
         url: String,
+        into_section: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    FactChecked {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        claim: String,
+        query: String,
+        sources: Vec<String>,
+        outcome: FactCheckOutcome,
         into_section: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
@@ -340,7 +399,14 @@ mod tests {
                 rejected_raw_path: None,
                 note: None,
             },
-            SessionEvent::SynthesizeStarted { timestamp: ts(), note: None },
+            SessionEvent::SynthesizeStarted {
+                timestamp: ts(),
+                no_render: false,
+                open: false,
+                bilingual: true,
+                bilingual_provider: Some("codex".into()),
+                note: None,
+            },
             SessionEvent::SynthesizeCompleted {
                 timestamp: ts(),
                 report_json_path: "report.json".into(),
@@ -356,9 +422,18 @@ mod tests {
                 reason: "json-ui not found".into(),
                 note: None,
             },
-            SessionEvent::SessionClosed { timestamp: ts(), note: None },
-            SessionEvent::SessionRemoved { timestamp: ts(), note: None },
-            SessionEvent::SessionResumed { timestamp: ts(), note: None },
+            SessionEvent::SessionClosed {
+                timestamp: ts(),
+                note: None,
+            },
+            SessionEvent::SessionRemoved {
+                timestamp: ts(),
+                note: None,
+            },
+            SessionEvent::SessionResumed {
+                timestamp: ts(),
+                note: None,
+            },
         ];
         assert_eq!(events.len(), 10, "must have 10 variants");
         for ev in events {
@@ -386,14 +461,62 @@ mod tests {
     }
 
     #[test]
+    fn roundtrips_agent_os_audit_events() {
+        let events = vec![
+            SessionEvent::ToolCallStarted {
+                timestamp: ts(),
+                call_id: "fetch-1".into(),
+                hand: "postagent".into(),
+                tool: "postagent send".into(),
+                input_summary: "url=https://example.test/".into(),
+                note: None,
+            },
+            SessionEvent::ToolCallCompleted {
+                timestamp: ts(),
+                call_id: "fetch-1".into(),
+                status: ToolCallStatus::Ok,
+                duration_ms: 42,
+                output_summary: "bytes=1234 warnings=0".into(),
+                artifact_refs: vec!["raw/1-example.json".into()],
+                error_code: None,
+                note: None,
+            },
+            SessionEvent::FactChecked {
+                timestamp: ts(),
+                iteration: 2,
+                claim: "Example claim".into(),
+                query: "Example claim source".into(),
+                sources: vec!["https://example.test/".into()],
+                outcome: FactCheckOutcome::Supported,
+                into_section: "## 02 - Facts".into(),
+                note: Some("official source".into()),
+            },
+        ];
+
+        for ev in events {
+            let s = serde_json::to_string(&ev).unwrap();
+            let back: SessionEvent = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, ev);
+        }
+    }
+
+    #[test]
     fn read_events_is_line_tolerant() {
         use std::io::Write;
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let mut f = tmp.reopen().unwrap();
         writeln!(f, r#"{{"event":"session_created","timestamp":"2026-04-19T12:00:00Z","slug":"foo","topic":"t","preset":"tech","session_dir_abs":"/tmp"}}"#).unwrap();
-        writeln!(f, r#"{{"event":"source_accepted","timestamp":"2026-04-19T12:00:00Z""#).unwrap(); // truncated
+        writeln!(
+            f,
+            r#"{{"event":"source_accepted","timestamp":"2026-04-19T12:00:00Z""#
+        )
+        .unwrap(); // truncated
         writeln!(f, r#"{{"event":"source_accepted","timestamp":"2026-04-19T12:00:00Z","url":"u","kind":"k","executor":"postagent","raw_path":"r","bytes":1,"trust_score":2.0}}"#).unwrap();
-        writeln!(f, r#"{{"event":"unknown_future_event","timestamp":"2026-04-19T12:00:00Z"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"event":"unknown_future_event","timestamp":"2026-04-19T12:00:00Z"}}"#
+        )
+        .unwrap();
         let events = read_events(tmp.path()).unwrap();
         assert_eq!(events.len(), 2, "only 2 valid events should come through");
     }

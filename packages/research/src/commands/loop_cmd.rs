@@ -4,11 +4,11 @@
 
 use serde_json::json;
 
-use crate::autoresearch::executor::{self, LoopConfig};
 #[cfg(feature = "provider-claude")]
 use crate::autoresearch::claude::ClaudeProvider;
 #[cfg(feature = "provider-codex")]
 use crate::autoresearch::codex::CodexProvider;
+use crate::autoresearch::executor::{self, LoopConfig};
 use crate::autoresearch::provider::{AgentProvider, FakeProvider};
 use crate::output::Envelope;
 use crate::session::{active, config};

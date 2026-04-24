@@ -174,7 +174,7 @@ fn close_marks_and_clears_active() {
     assert!(toml.contains("closed_at"));
     // session.jsonl last event is session_closed
     let jsonl = std::fs::read_to_string(env.root().join("foo/session.jsonl")).unwrap();
-    let last = jsonl.lines().filter(|l| !l.is_empty()).last().unwrap();
+    let last = jsonl.lines().rfind(|l| !l.is_empty()).unwrap();
     assert!(last.contains("session_closed"), "last line: {last}");
 }
 

@@ -78,12 +78,8 @@ pub fn run(tag: &str, open: bool) -> Envelope {
     members.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
     if members.is_empty() {
-        return Envelope::fail(
-            CMD,
-            "TAG_NOT_FOUND",
-            format!("no sessions tagged '{tag}'"),
-        )
-        .with_context(json!({ "tag": tag }));
+        return Envelope::fail(CMD, "TAG_NOT_FOUND", format!("no sessions tagged '{tag}'"))
+            .with_context(json!({ "tag": tag }));
     }
 
     let doc = build_index_doc(tag, &members);
@@ -144,8 +140,7 @@ fn extract_first_finding(json_path: &Path) -> Option<String> {
     let v: Value = serde_json::from_str(&text).ok()?;
     let children = v.get("children")?.as_array()?;
     let findings_section = children.iter().find(|c| {
-        c.get("props").and_then(|p| p.get("title"))
-            == Some(&Value::String("Key Findings".into()))
+        c.get("props").and_then(|p| p.get("title")) == Some(&Value::String("Key Findings".into()))
     })?;
     let list = findings_section.get("children")?.as_array()?.first()?;
     let items = list.get("props")?.get("items")?.as_array()?;

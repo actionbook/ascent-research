@@ -80,7 +80,11 @@ pub fn prompt_body(slug: &str) -> Option<String> {
     let body = read(slug)?;
     let cleaned = strip_html_comments(&body);
     let trimmed = cleaned.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn strip_html_comments(s: &str) -> String {
@@ -114,7 +118,13 @@ mod tests {
 
     #[test]
     fn starter_template_has_expected_sections() {
-        for section in ["## Goal", "## Wiki conventions", "## What to emphasize", "## What to deprioritize", "## House style"] {
+        for section in [
+            "## Goal",
+            "## Wiki conventions",
+            "## What to emphasize",
+            "## What to deprioritize",
+            "## House style",
+        ] {
             assert!(STARTER_TEMPLATE.contains(section), "missing {section}");
         }
     }

@@ -11,12 +11,12 @@ depends: [research-cli-foundation]
 把路由规则从"Rust 枚举硬编码"升级为"TOML preset 文件驱动",实装 `research route <url>`
 子命令。目标是让用户加一个新领域的权威源等同于**写一份 TOML 文件,零 Rust 改动**。
 
-Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与现有
-`actionbook source route` 的硬编码规则 bit-identical),后续领域由
-`source-route-domain-preset` discovery 任务决定加哪些。
+Preset ship 在 `packages/research/presets/` 并内嵌进 crate,首发 `tech.toml`。
+v0.3 之后 `ascent-research route` 不再追求和早期 `actionbook source route`
+bit-identical; 它表达 ascent-research 自己的 hand contract。
 
 `actionbook source route` 子命令**保留不变**——作为 actionbook 通用能力,非研究场景
-也能用;`research route` 内部 port 相同逻辑 + 支持 TOML 加载,两者独立演化。
+也能用;`research route` 支持 TOML 加载,两者独立演化。
 
 ## 已定决策
 
@@ -30,14 +30,14 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
   host = "news.ycombinator.com"
   path = "/item"
   query_param = { id = "^[0-9]+$" }
-  executor = "postagent"
-  template = 'postagent send --anonymous "https://hacker-news.firebaseio.com/v0/item/{id}.json"'
+  executor = "browser"
+  template = 'actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'
 
   [[rule]]
   kind = "hn-topstories"
   host = "news.ycombinator.com"
   path_any_of = ["/", "", "/news"]
-  executor = "postagent"
+  executor = "browser"
   template = '...'
 
   [[rule]]
@@ -45,7 +45,7 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
   host = "github.com"
   path_segments = ["{owner}", "{repo}"]       # 正好 2 段
   executor = "postagent"
-  template = 'postagent send --anonymous "https://api.github.com/repos/{owner}/{repo}/readme"'
+  template = 'postagent send "https://api.github.com/repos/{owner}/{repo}/readme" -H "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN"'
 
   [fallback]
   executor = "browser"
@@ -65,11 +65,13 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
 - Preset 查找顺序:
   1. `--rules <path>`(完整路径)覆盖
   2. `--preset <name>` 查找顺序:
-     a. `~/.actionbook/research/presets/<name>.toml`(用户覆盖)
-     b. 安装位置 `<crate>/presets/<name>.toml`(内置)
+     a. `~/.actionbook/ascent-research/presets/<name>.toml`(用户覆盖)
+     b. `~/.actionbook/research/presets/<name>.toml`(legacy 只读 fallback)
+     c. packaged crate 内置 preset
   3. 无 `--preset` / `--rules` 时默认 `tech`
-- **内置 tech preset 必须和现有 `actionbook source route` 规则行为一致**(port 5 条规则:
-  hn-item / hn-topstories / github-repo-readme / github-issue / arxiv-abs)
+- **内置 tech preset 是 ascent-research 自己的 hand contract**: 公共网页/HN/arXiv/raw
+  GitHub 文件走 `browser`; GitHub API 资源(repo README / issue / tree contents)
+  走 `postagent` 且模板必须包含 `$POSTAGENT.*` credential placeholder。
 - **Preset 加载错误**统一 error code `PRESET_ERROR`,但 `error.details.sub_code` 必须
   区分:`FILE_NOT_FOUND` / `TOML_SYNTAX` / `SCHEMA_INVALID`(缺必需字段) /
   `PLACEHOLDER_UNBOUND`(见下)。LLM 看 sub_code 自调试。
@@ -106,16 +108,16 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
 
 ## 完成条件
 
-场景: tech preset 的 5 条规则和 actionbook source route 行为一致
+场景: tech preset 的代表规则符合 ascent-research hand contract
   测试:
     包: research-api-adapter/packages/research
     过滤: route_tech_parity_with_actionbook
   层级: integration
-  假设 `presets/tech.toml` ship 齐 5 条规则(hn-item / hn-topstories / github-repo-readme / github-issue / arxiv-abs)
-  当 对每条规则的代表 URL 同时跑 `research route <url> --json` 和
-    `actionbook source route <url> --json`
-  那么 `.data.executor`, `.data.kind`, `.data.command_template` 一致
-    (字段名按两者协议 normalize 后对比)
+  假设 `presets/tech.toml` ship 齐代表规则(hn-item / hn-topstories / github-repo-readme / github-issue / github-file / github-tree / github-raw / arxiv-abs)
+  当 对每条规则的代表 URL 跑 `research route <url> --json`
+  那么 HN、arXiv、raw GitHub 文件的 `.data.executor` 是 `"browser"`
+  并且 GitHub API 资源的 `.data.executor` 是 `"postagent"`
+  并且 postagent 模板包含 `$POSTAGENT.GITHUB.TOKEN`
   并且 未匹配任何规则的 URL 都落到 `browser-fallback`
 
 场景: 用户 TOML 覆盖内置
@@ -123,7 +125,7 @@ Preset ship 在 `research-api-adapter/presets/` 目录下,首发 `tech.toml`(与
     包: research-api-adapter/packages/research
     过滤: route_user_preset_override
   层级: integration
-  假设 `~/.actionbook/research/presets/tech.toml` 用户版把 hn-item 的 template 改了
+  假设 `~/.actionbook/ascent-research/presets/tech.toml` 用户版把 hn-item 的 template 改了
   当 `research route "https://news.ycombinator.com/item?id=1" --preset tech`
   那么 返回用户版 template,不是内置版
   假设 去掉用户版文件

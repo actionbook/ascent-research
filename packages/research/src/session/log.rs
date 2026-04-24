@@ -64,7 +64,7 @@ mod tests {
             note: None,
         };
         assert_eq!(next_raw_index(&[]), 1);
-        assert_eq!(next_raw_index(&[attempt.clone()]), 2);
+        assert_eq!(next_raw_index(std::slice::from_ref(&attempt)), 2);
         assert_eq!(next_raw_index(&[attempt.clone(), attempt.clone()]), 3);
     }
 }

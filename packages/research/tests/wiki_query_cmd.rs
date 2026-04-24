@@ -135,7 +135,10 @@ fn query_returns_answer_and_logs_event() {
     assert!(answer.contains("[[scheduler]]"));
     let relevant = v["data"]["relevant_pages"].as_array().unwrap();
     let slugs: Vec<&str> = relevant.iter().filter_map(|v| v.as_str()).collect();
-    assert!(slugs.contains(&"scheduler"), "scheduler must rank relevant, got {slugs:?}");
+    assert!(
+        slugs.contains(&"scheduler"),
+        "scheduler must rank relevant, got {slugs:?}"
+    );
     // jsonl must contain a wiki_query event
     let jsonl = fs::read_to_string(env.home_path().join("q-ok").join("session.jsonl")).unwrap();
     assert!(
@@ -149,7 +152,10 @@ fn query_save_as_writes_analysis_page() {
     let env = Env::new();
     env.seed_session_with_wiki(
         "q-save",
-        &[("scheduler", "---\nkind: concept\n---\n# Scheduler\nDescribes the scheduler.")],
+        &[(
+            "scheduler",
+            "---\nkind: concept\n---\n# Scheduler\nDescribes the scheduler.",
+        )],
     );
     let (v, code, _) = env.run_with_env(
         &[

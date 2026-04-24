@@ -46,10 +46,10 @@ pub fn run(filter_tag: Option<&str>, tree: bool) -> Envelope {
             Ok(c) => c,
             Err(_) => continue,
         };
-        if let Some(t) = filter_tag {
-            if !cfg.tags.iter().any(|x| x == t) {
-                continue;
-            }
+        if let Some(t) = filter_tag
+            && !cfg.tags.iter().any(|x| x == t)
+        {
+            continue;
         }
         let source_count = log::read_all(&slug)
             .map(|events| {
@@ -101,8 +101,7 @@ fn render_flat(rows: Vec<Row>) -> Envelope {
 
 fn render_tree(rows: Vec<Row>) -> Envelope {
     // Index by slug + group by parent.
-    let slugs: std::collections::HashSet<String> =
-        rows.iter().map(|r| r.slug.clone()).collect();
+    let slugs: std::collections::HashSet<String> = rows.iter().map(|r| r.slug.clone()).collect();
     let mut children_of: HashMap<String, Vec<&Row>> = HashMap::new();
     let mut roots: Vec<&Row> = Vec::new();
     let mut orphans: Vec<&Row> = Vec::new();
@@ -135,10 +134,7 @@ fn render_tree(rows: Vec<Row>) -> Envelope {
         })
     }
 
-    let tree_json: Vec<Value> = roots
-        .iter()
-        .map(|r| node_json(r, &children_of))
-        .collect();
+    let tree_json: Vec<Value> = roots.iter().map(|r| node_json(r, &children_of)).collect();
 
     // Plain-text ASCII rendering — printed via envelope's non-JSON path.
     // We also dump it to stderr-neutral stdout eagerly so plain-text users

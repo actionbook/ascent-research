@@ -54,20 +54,20 @@ impl Env {
 #[test]
 fn new_seeds_starter_schema() {
     let env = Env::new();
-    let (_, code, _) = env.run(&[
-        "new",
-        "schema smoke",
-        "--slug",
-        "sch-new",
-        "--json",
-    ]);
+    let (_, code, _) = env.run(&["new", "schema smoke", "--slug", "sch-new", "--json"]);
     assert_eq!(code, 0, "research new should succeed");
 
     let schema_path = env.home_path().join("sch-new").join("SCHEMA.md");
-    assert!(schema_path.exists(), "SCHEMA.md must be seeded on `research new`");
+    assert!(
+        schema_path.exists(),
+        "SCHEMA.md must be seeded on `research new`"
+    );
     let body = fs::read_to_string(&schema_path).unwrap();
     for section in ["## Goal", "## Wiki conventions", "## House style"] {
-        assert!(body.contains(section), "starter SCHEMA.md missing {section}");
+        assert!(
+            body.contains(section),
+            "starter SCHEMA.md missing {section}"
+        );
     }
 }
 
@@ -149,7 +149,8 @@ fn schema_edit_no_change_no_event() {
     assert_eq!(code, 0);
     assert_eq!(v["data"]["changed"], Value::Bool(false));
 
-    let jsonl = fs::read_to_string(env.home_path().join("sch-noedit").join("session.jsonl")).unwrap();
+    let jsonl =
+        fs::read_to_string(env.home_path().join("sch-noedit").join("session.jsonl")).unwrap();
     assert!(
         !jsonl.contains(r#""event":"schema_updated""#),
         "should not emit schema_updated when nothing changed"

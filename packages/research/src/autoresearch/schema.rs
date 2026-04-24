@@ -11,6 +11,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::session::event::FactCheckOutcome;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LoopResponse {
     /// One or two sentences describing the agent's decision for this round.
@@ -75,6 +77,20 @@ pub enum Action {
         into_section: String,
     },
 
+    /// v4: record explicit factual verification for a concrete dynamic
+    /// claim before the report depends on it. Sources must already be
+    /// accepted in this session; the executor validates that before
+    /// appending `FactChecked`.
+    FactCheck {
+        claim: String,
+        query: String,
+        sources: Vec<String>,
+        outcome: FactCheckOutcome,
+        into_section: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
     /// v2: write (or replace) the `## Plan` section — the north-star the
     /// agent re-reads every subsequent turn. On the first iteration of a
     /// fresh session, this is the **only** action the loop accepts until
@@ -110,14 +126,13 @@ pub enum Action {
     /// missing). Content is prepended with a `<!-- appended YYYY-MM-DD -->`
     /// marker so multi-ingest history is visible. Safer default for
     /// incremental updates than `write_wiki_page { replace: true }`.
-    AppendWikiPage {
-        slug: String,
-        body: String,
-    },
+    AppendWikiPage { slug: String, body: String },
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::session::event::FactCheckOutcome;
+
     use super::*;
 
     #[test]
@@ -152,6 +167,46 @@ mod tests {
                 assert_eq!(*concurrency, Some(2));
             }
             _ => panic!("expected Batch"),
+        }
+    }
+
+    #[test]
+    fn parses_fact_check_action() {
+        let json = r###"{
+            "reasoning": "verify roster claim",
+            "actions": [{
+                "type": "fact_check",
+                "claim": "Anthony Davis is on the Lakers roster",
+                "query": "Lakers current roster Anthony Davis 2026",
+                "sources": ["https://official.test/roster"],
+                "outcome": "refuted",
+                "into_section": "## 02 - Current Rosters",
+                "note": "official roster page does not list him"
+            }],
+            "done": false
+        }"###;
+
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::FactCheck {
+                claim,
+                query,
+                sources,
+                outcome,
+                into_section,
+                note,
+            } => {
+                assert!(claim.contains("Anthony Davis"));
+                assert!(query.contains("current roster"));
+                assert_eq!(sources, &vec!["https://official.test/roster".to_string()]);
+                assert_eq!(*outcome, FactCheckOutcome::Refuted);
+                assert_eq!(into_section, "## 02 - Current Rosters");
+                assert_eq!(
+                    note.as_deref(),
+                    Some("official roster page does not list him")
+                );
+            }
+            other => panic!("expected fact_check, got {other:?}"),
         }
     }
 
@@ -299,7 +354,11 @@ mod tests {
         }"#;
         let r: LoopResponse = serde_json::from_str(json).unwrap();
         match &r.actions[0] {
-            Action::WriteWikiPage { slug, body, replace } => {
+            Action::WriteWikiPage {
+                slug,
+                body,
+                replace,
+            } => {
                 assert_eq!(slug, "scheduler");
                 assert!(body.contains("# Scheduler"));
                 assert!(!replace, "replace defaults to false");

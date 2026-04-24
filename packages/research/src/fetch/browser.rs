@@ -108,7 +108,16 @@ pub fn run(
     let new_tab_args: Vec<&str> = if sharing {
         vec!["browser", "new-tab", url, "--session", &session, "--json"]
     } else {
-        vec!["browser", "new-tab", url, "--session", &session, "--tab", &tab, "--json"]
+        vec![
+            "browser",
+            "new-tab",
+            url,
+            "--session",
+            &session,
+            "--tab",
+            &tab,
+            "--json",
+        ]
     };
     let r1 = one_step(&bin, &new_tab_args, budget_remaining(start, timeout_ms)?)?;
     if r1.exit_code != 0 {
@@ -123,7 +132,10 @@ pub fn run(
                 stdout_txt.clone()
             }
         });
-        return Err(format!("browser new-tab exit {}: {}", r1.exit_code, err_msg));
+        return Err(format!(
+            "browser new-tab exit {}: {}",
+            r1.exit_code, err_msg
+        ));
     }
 
     // If we auto-assigned, parse back the tab ID the daemon picked.
@@ -169,7 +181,13 @@ pub fn run(
     // raw text body if needed.
     let _ = readable;
     let arg_refs: Vec<&str> = vec![
-        "browser", "text", "--session", &session, "--tab", &tab, "--json",
+        "browser",
+        "text",
+        "--session",
+        &session,
+        "--tab",
+        &tab,
+        "--json",
     ];
     let r3 = one_step(&bin, &arg_refs, budget_remaining(start, timeout_ms)?)?;
     if r3.exit_code != 0 {
@@ -184,7 +202,13 @@ pub fn run(
     let _ = one_step(
         &bin,
         &[
-            "browser", "close-tab", "--session", &session, "--tab", &tab, "--json",
+            "browser",
+            "close-tab",
+            "--session",
+            &session,
+            "--tab",
+            &tab,
+            "--json",
         ],
         budget_remaining(start, timeout_ms).unwrap_or(2000),
     );
@@ -196,10 +220,7 @@ pub fn run(
             String::from_utf8_lossy(&r3.raw_stdout[..r3.raw_stdout.len().min(256)])
         )
     })?;
-    let observed_url = v["context"]["url"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let observed_url = v["context"]["url"].as_str().unwrap_or("").to_string();
     let body = v["data"]["value"]
         .as_str()
         .unwrap_or("")
@@ -279,7 +300,12 @@ fn one_step(bin: &str, args: &[&str], timeout_ms: u64) -> Result<RawFetch, Strin
     let raw_stdout = stdout_h
         .join()
         .map_err(|_| "stdout thread panicked".to_string())?
-        .map_err(|_| format!("actionbook stdout exceeded {} MiB cap", ACTIONBOOK_STDOUT_CAP / (1024 * 1024)))?;
+        .map_err(|_| {
+            format!(
+                "actionbook stdout exceeded {} MiB cap",
+                ACTIONBOOK_STDOUT_CAP / (1024 * 1024)
+            )
+        })?;
     let raw_stderr = stderr_h.join().unwrap_or_default();
 
     Ok(RawFetch {
@@ -296,7 +322,8 @@ fn one_step(bin: &str, args: &[&str], timeout_ms: u64) -> Result<RawFetch, Strin
 fn parse_profile_conflict(text: &str) -> Option<String> {
     // Matches: `profile 'NAME' is already in use by session 'OTHER'`
     let re = regex::Regex::new(r"already in use by session '([^']+)'").ok()?;
-    re.captures(text).and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+    re.captures(text)
+        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
 }
 
 /// Parse the tab ID that actionbook auto-assigned from a `new-tab --json`

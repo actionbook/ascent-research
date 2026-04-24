@@ -84,9 +84,7 @@ impl Env {
 }
 
 fn r_done(reason: &str) -> String {
-    format!(
-        r#"{{"reasoning":"wrapping up","actions":[],"done":true,"reason":"{reason}"}}"#
-    )
+    format!(r#"{{"reasoning":"wrapping up","actions":[],"done":true,"reason":"{reason}"}}"#)
 }
 
 fn r_write_overview(body: &str) -> String {
@@ -189,11 +187,7 @@ fn loop_dry_run_does_not_modify_session() {
 
     let write = r_write_overview("BRAND NEW OVERVIEW");
     let done = r_done("done");
-    let (v, code, _) = env.loop_cmd(
-        "l5",
-        &[write.as_str(), done.as_str()],
-        &["--dry-run"],
-    );
+    let (v, code, _) = env.loop_cmd("l5", &[write.as_str(), done.as_str()], &["--dry-run"]);
     assert_eq!(code, 0);
     assert_eq!(v["data"]["actions_executed"], 1);
 
@@ -211,7 +205,10 @@ fn loop_dry_run_does_not_modify_session() {
 #[test]
 fn loop_write_overview_replaces_body() {
     let env = Env::new();
-    env.prep("l6", "## Overview\nold content.\n\n## 01 · WHY\nwhy body.\n");
+    env.prep(
+        "l6",
+        "## Overview\nold content.\n\n## 01 · WHY\nwhy body.\n",
+    );
 
     let write = r_write_overview("fresh overview by the loop");
     let done = r_done("done");
@@ -278,15 +275,24 @@ fn loop_writes_start_step_and_completed_events() {
 
     let jsonl = fs::read_to_string(env.session_dir("l9").join("session.jsonl")).unwrap();
     assert_eq!(
-        jsonl.lines().filter(|l| l.contains(r#""event":"loop_started""#)).count(),
+        jsonl
+            .lines()
+            .filter(|l| l.contains(r#""event":"loop_started""#))
+            .count(),
         1
     );
     assert_eq!(
-        jsonl.lines().filter(|l| l.contains(r#""event":"loop_step""#)).count(),
+        jsonl
+            .lines()
+            .filter(|l| l.contains(r#""event":"loop_step""#))
+            .count(),
         1
     );
     assert_eq!(
-        jsonl.lines().filter(|l| l.contains(r#""event":"loop_completed""#)).count(),
+        jsonl
+            .lines()
+            .filter(|l| l.contains(r#""event":"loop_completed""#))
+            .count(),
         1
     );
 }
@@ -298,9 +304,7 @@ fn loop_unknown_provider_returns_provider_not_available() {
     let env = Env::new();
     env.prep("l10", "## Overview\nbase.\n");
 
-    let (v, code, _) = env.research(&[
-        "loop", "l10", "--provider", "mystery", "--json",
-    ]);
+    let (v, code, _) = env.research(&["loop", "l10", "--provider", "mystery", "--json"]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "PROVIDER_NOT_AVAILABLE");
     assert!(
@@ -316,9 +320,7 @@ fn loop_unknown_provider_returns_provider_not_available() {
 #[test]
 fn loop_session_not_found() {
     let env = Env::new();
-    let (v, code, _) = env.research(&[
-        "loop", "nope", "--provider", "fake", "--json",
-    ]);
+    let (v, code, _) = env.research(&["loop", "nope", "--provider", "fake", "--json"]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "SESSION_NOT_FOUND");
 }
@@ -328,16 +330,38 @@ fn loop_session_not_found() {
 /// Pre-seed a `source_accepted` jsonl line so `digest_source` has something
 /// legal to target. Returns nothing; test uses `url` to verify side effects.
 fn seed_accepted(env: &Env, slug: &str, url: &str) {
-    use std::io::Write;
-    let line = format!(
+    append_jsonl(env, slug, &source_accepted_line(url));
+}
+
+fn source_accepted_line(url: &str) -> String {
+    format!(
         r#"{{"event":"source_accepted","timestamp":"2026-04-19T12:00:00Z","url":"{url}","kind":"arxiv-abs","executor":"postagent","raw_path":"raw/1-arxiv.json","bytes":1000,"trust_score":2.0}}"#
-    );
+    )
+}
+
+fn source_digested_line(url: &str) -> String {
+    format!(
+        r###"{{"event":"source_digested","timestamp":"2026-04-19T12:01:00Z","iteration":1,"url":"{url}","into_section":"## Overview"}}"###
+    )
+}
+
+fn append_jsonl(env: &Env, slug: &str, line: &str) {
+    use std::io::Write;
     let path = env.session_dir(slug).join("session.jsonl");
     let mut f = fs::OpenOptions::new()
         .append(true)
         .open(&path)
         .expect("open session.jsonl for append");
     writeln!(f, "{line}").unwrap();
+}
+
+fn warning_strings(v: &Value) -> Vec<String> {
+    v["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap().to_string())
+        .collect()
 }
 
 // ── Test 12: digest_source writes source_digested event ──────────────────
@@ -367,6 +391,156 @@ fn loop_digest_source_writes_jsonl_event() {
         jsonl.contains(r###""into_section":"## 02 · WHAT""###),
         "into_section should be preserved"
     );
+}
+
+// v4 — explicit fact-check audit events ───────────────────────────────────
+
+#[test]
+fn loop_fact_check_writes_jsonl_event() {
+    let env = Env::new();
+    env.prep("fc1", "## Overview\nbase.\n");
+    let url = "https://official.test/roster";
+    seed_accepted(&env, "fc1", url);
+    append_jsonl(&env, "fc1", &source_digested_line(url));
+
+    let fact_check = format!(
+        r###"{{"reasoning":"verify claim","actions":[{{"type":"fact_check","claim":"LeBron is on roster","query":"official roster LeBron","sources":["{url}"],"outcome":"supported","into_section":"## Overview","note":"official roster"}}],"done":false}}"###
+    );
+    let done = r_done("done");
+    let (v, code, stderr) = env.loop_cmd(
+        "fc1",
+        &[fact_check.as_str(), done.as_str()],
+        &["--iterations", "2"],
+    );
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 1);
+    let jsonl = fs::read_to_string(env.session_dir("fc1").join("session.jsonl")).unwrap();
+    assert!(
+        jsonl.contains(r#""event":"fact_checked""#),
+        "expected fact_checked event in jsonl; got:\n{jsonl}"
+    );
+    assert!(jsonl.contains(r#""outcome":"supported""#));
+    assert!(jsonl.contains("LeBron is on roster"));
+}
+
+#[test]
+fn loop_fact_check_appends_without_rewriting_prior_events() {
+    let env = Env::new();
+    env.prep("fc2", "## Overview\nbase.\n");
+    let url = "https://official.test/facts";
+    seed_accepted(&env, "fc2", url);
+    append_jsonl(&env, "fc2", &source_digested_line(url));
+    let old_line = format!(
+        r###"{{"event":"fact_checked","timestamp":"2026-04-19T12:00:00Z","iteration":1,"claim":"old claim","query":"old query","sources":["{url}"],"outcome":"supported","into_section":"## Overview"}}"###
+    );
+    append_jsonl(&env, "fc2", &old_line);
+
+    let fact_check = format!(
+        r###"{{"reasoning":"verify new claim","actions":[{{"type":"fact_check","claim":"new claim","query":"new query","sources":["{url}"],"outcome":"uncertain","into_section":"## Overview"}}],"done":false}}"###
+    );
+    let done = r_done("done");
+    let (v, code, stderr) = env.loop_cmd(
+        "fc2",
+        &[fact_check.as_str(), done.as_str()],
+        &["--iterations", "2"],
+    );
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 1);
+    let jsonl = fs::read_to_string(env.session_dir("fc2").join("session.jsonl")).unwrap();
+    assert!(jsonl.contains(&old_line), "old fact_checked line changed");
+    let fact_lines: Vec<&str> = jsonl
+        .lines()
+        .filter(|line| line.contains(r#""event":"fact_checked""#))
+        .collect();
+    assert_eq!(fact_lines.len(), 2, "expected two fact_checked events");
+    assert_eq!(fact_lines[0], old_line);
+    assert!(fact_lines[1].contains("new claim"));
+}
+
+#[test]
+fn loop_fact_check_rejects_unknown_source() {
+    let env = Env::new();
+    env.prep("fc3", "## Overview\nbase.\n");
+
+    let fact_check = r###"{"reasoning":"verify claim","actions":[{"type":"fact_check","claim":"claim","query":"query","sources":["https://unknown.test/"],"outcome":"supported","into_section":"## Overview"}],"done":false}"###;
+    let done = r_done("done");
+    let (v, code, stderr) = env.loop_cmd("fc3", &[fact_check, done.as_str()], &[]);
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 0);
+    let warnings = warning_strings(&v);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("fact_check_unknown_source")),
+        "expected fact_check_unknown_source warning; got: {warnings:?}"
+    );
+    let jsonl = fs::read_to_string(env.session_dir("fc3").join("session.jsonl")).unwrap();
+    assert!(!jsonl.contains(r#""event":"fact_checked""#));
+}
+
+#[test]
+fn loop_fact_check_rejects_undigested_source() {
+    let env = Env::new();
+    env.prep("fc3b", "## Overview\nbase.\n");
+    let url = "https://official.test/roster";
+    seed_accepted(&env, "fc3b", url);
+
+    let fact_check = format!(
+        r###"{{"reasoning":"verify claim","actions":[{{"type":"fact_check","claim":"claim","query":"query","sources":["{url}"],"outcome":"supported","into_section":"## Overview"}}],"done":false}}"###
+    );
+    let done = r_done("done");
+    let (v, code, stderr) = env.loop_cmd("fc3b", &[fact_check.as_str(), done.as_str()], &[]);
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 0);
+    let warnings = warning_strings(&v);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("fact_check_undigested_source")),
+        "expected fact_check_undigested_source warning; got: {warnings:?}"
+    );
+    let jsonl = fs::read_to_string(env.session_dir("fc3b").join("session.jsonl")).unwrap();
+    assert!(!jsonl.contains(r#""event":"fact_checked""#));
+}
+
+#[test]
+fn loop_fact_check_rejects_empty_claim_or_query() {
+    let env = Env::new();
+    env.prep("fc4", "## Overview\nbase.\n");
+    let url = "https://official.test/facts";
+    seed_accepted(&env, "fc4", url);
+    append_jsonl(&env, "fc4", &source_digested_line(url));
+
+    let empty_claim = format!(
+        r###"{{"reasoning":"bad claim","actions":[{{"type":"fact_check","claim":"","query":"query","sources":["{url}"],"outcome":"supported","into_section":"## Overview"}}],"done":false}}"###
+    );
+    let empty_query = format!(
+        r###"{{"reasoning":"bad query","actions":[{{"type":"fact_check","claim":"claim","query":"","sources":["{url}"],"outcome":"supported","into_section":"## Overview"}}],"done":false}}"###
+    );
+    let done = r_done("done");
+    let (v, code, stderr) = env.loop_cmd(
+        "fc4",
+        &[empty_claim.as_str(), empty_query.as_str(), done.as_str()],
+        &["--iterations", "3"],
+    );
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(v["data"]["actions_executed"], 0);
+    let warnings = warning_strings(&v);
+    assert!(
+        warnings
+            .iter()
+            .filter(|w| w.contains("fact_check_invalid"))
+            .count()
+            >= 2,
+        "expected fact_check_invalid warnings; got: {warnings:?}"
+    );
+    let jsonl = fs::read_to_string(env.session_dir("fc4").join("session.jsonl")).unwrap();
+    assert!(!jsonl.contains(r#""event":"fact_checked""#));
 }
 
 // v2 Step 4 — first-iter plan enforcement ────────────────────────────────
@@ -549,7 +723,9 @@ fn loop_subsequent_iter_sees_digested_sources_excluded() {
         .map(|w| w.as_str().unwrap().to_string())
         .collect();
     assert!(
-        warnings.iter().any(|w| w.contains("source_already_digested")),
+        warnings
+            .iter()
+            .any(|w| w.contains("source_already_digested")),
         "expected source_already_digested warning; got: {warnings:?}"
     );
 }

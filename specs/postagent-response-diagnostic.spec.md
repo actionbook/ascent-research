@@ -3,7 +3,14 @@ name: "postagent-response-diagnostic"
 inherits: project
 tags: [postagent, diagnostics, error-handling, phase-2]
 estimate: 0.5d
+status: archived
+superseded_for_ascent_research_by: research-cli-doctor
 ---
+
+> Historical note: this postagent diagnostic spec predates the v0.3
+> ascent-research hand boundary. Current ascent-research docs should rely on
+> `doctor --tool-smoke` and route warnings instead of public anonymous
+> postagent fetches.
 
 ## 意图
 

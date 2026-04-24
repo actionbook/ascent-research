@@ -4,7 +4,15 @@ inherits: project
 tags: [active-research, skill, routing, postagent]
 estimate: 1d
 depends: [postagent-anonymous-flag, active-research-cli-alignment]
+status: archived
+superseded_by: [research-route-toml-presets, research-sports-preset]
 ---
+
+> Historical note: this spec describes the pre-ascent-research active-research
+> skill route table. It is not the v0.3 `ascent-research` contract. Current
+> behavior is: public pages/docs/news/sports go through the browser hand;
+> token-bearing API resources go through postagent with an explicit
+> `$POSTAGENT.*` placeholder.
 
 ## 意图
 

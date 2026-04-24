@@ -52,7 +52,8 @@ pub fn render_wiki(slug: &str, session_dir: &Path) -> Result<WikiRender, RenderE
     // Table of contents — one pill per page, grouped by kind, with
     // anchor links to the per-page section below. Browsable without
     // scrolling through the whole report.
-    let mut toc_entries: Vec<(String, Option<String>, Option<String>)> = Vec::with_capacity(page_slugs.len());
+    let mut toc_entries: Vec<(String, Option<String>, Option<String>)> =
+        Vec::with_capacity(page_slugs.len());
     for page_slug in &page_slugs {
         if let Ok(body) = wiki::read_page(slug, page_slug) {
             let (fm, _rest) = wiki::split_frontmatter(&body);
@@ -133,7 +134,11 @@ fn extract_title(html: &str) -> Option<String> {
     // Strip nested tags inside <h1>.
     let raw = caps.get(1)?.as_str();
     let stripped = tag_strip_re().replace_all(raw, "").trim().to_string();
-    if stripped.is_empty() { None } else { Some(stripped) }
+    if stripped.is_empty() {
+        None
+    } else {
+        Some(stripped)
+    }
 }
 
 fn tag_strip_re() -> &'static Regex {
@@ -151,11 +156,7 @@ mod tests {
         set.insert("scheduler");
         set.insert("task-system");
         let mut broken = 0u32;
-        let out = rewrite_wiki_links(
-            "See [[scheduler]] and [[task-system]].",
-            &set,
-            &mut broken,
-        );
+        let out = rewrite_wiki_links("See [[scheduler]] and [[task-system]].", &set, &mut broken);
         assert_eq!(broken, 0);
         assert!(out.contains(r##"href="#wiki-scheduler""##));
         assert!(out.contains(r##"href="#wiki-task-system""##));

@@ -3,7 +3,13 @@ name: "postagent-anonymous-flag"
 inherits: project
 tags: [postagent, cli, dependency-blocker]
 estimate: 0.5d
+status: archived
+superseded_for_ascent_research_by: research-route-toml-presets
 ---
+
+> Historical note: ascent-research v0.3 no longer depends on public
+> `postagent --anonymous` fetches. Public pages route to browser; postagent is
+> reserved for API/credential hands with explicit `$POSTAGENT.*` placeholders.
 
 ## 意图
 

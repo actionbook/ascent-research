@@ -42,7 +42,7 @@ depends: [research-cli-foundation, research-session-lifecycle, research-synthesi
 - `series <tag>`:
   - 扫 research_root,收集所有带该 tag 的 session
   - 按 `created_at` 升序排列
-  - 生成 `~/.actionbook/research/series-<tag>.html`:
+  - 生成 `~/.actionbook/ascent-research/series-<tag>.html`:
     - 标题:`Research series: <tag>`
     - 每个 session 一节:slug、topic、链接到 `<slug>/report.html`、摘要
       (从 report.json 的 Key Findings 取第一项 title)
@@ -135,7 +135,7 @@ depends: [research-cli-foundation, research-session-lifecycle, research-synthesi
   层级: integration
   假设 3 个 session 都带 tag "rust-series",各自已 synthesize(有 report.html)
   当 `research series rust-series --json`
-  那么 `~/.actionbook/research/series-rust-series.html` 存在
+  那么 `~/.actionbook/ascent-research/series-rust-series.html` 存在
   并且 HTML 含 3 个 session 的 slug / topic / 相对链接到各 report.html
   并且 响应 JSON 含 `member_count: 3`
 

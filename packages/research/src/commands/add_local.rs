@@ -154,7 +154,9 @@ fn normalize_path(input: &str) -> Option<std::path::PathBuf> {
             None => return None,
         }
     } else if let Some(rest) = input.strip_prefix("~/") {
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok()?;
         format!("{home}/{rest}")
     } else if input.starts_with('/') || input.starts_with("./") || input.starts_with("../") {
         input.to_string()

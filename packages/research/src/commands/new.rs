@@ -5,9 +5,7 @@ use std::fs;
 
 use crate::output::Envelope;
 use crate::session::{
-    active, config,
-    event::SessionEvent,
-    layout, log, md_parser, md_template, schema,
+    active, config, event::SessionEvent, layout, log, md_parser, md_template, schema,
     slug as slugmod,
 };
 
@@ -63,16 +61,16 @@ pub fn run(
     };
 
     // Cycle check: walking parent chain should not hit `resolved`.
-    if let Some(parent) = from {
-        if detect_cycle(parent, &resolved) {
-            return Envelope::fail(
-                CMD,
-                "CYCLE_DETECTED",
-                format!(
-                    "parent chain starting at '{parent}' would create a cycle back to '{resolved}'"
-                ),
-            );
-        }
+    if let Some(parent) = from
+        && detect_cycle(parent, &resolved)
+    {
+        return Envelope::fail(
+            CMD,
+            "CYCLE_DETECTED",
+            format!(
+                "parent chain starting at '{parent}' would create a cycle back to '{resolved}'"
+            ),
+        );
     }
 
     let dir = layout::session_dir(&resolved);
@@ -98,12 +96,7 @@ pub fn run(
         return Envelope::fail(CMD, "IO_ERROR", format!("write session.toml: {e}"));
     }
 
-    let md = md_template::render_with_context(
-        topic,
-        &preset,
-        from,
-        parent_overview.as_deref(),
-    );
+    let md = md_template::render_with_context(topic, &preset, from, parent_overview.as_deref());
     if let Err(e) = fs::write(layout::session_md(&resolved), md) {
         let _ = fs::remove_dir_all(&dir);
         return Envelope::fail(CMD, "IO_ERROR", format!("write session.md: {e}"));
@@ -154,6 +147,7 @@ pub fn run(
 }
 
 /// Load parent's Overview + tags for inheritance.
+#[allow(clippy::result_large_err)]
 fn load_parent(parent_slug: &str) -> Result<(Option<String>, Vec<String>), Envelope> {
     if !config::exists(parent_slug) {
         return Err(Envelope::fail(

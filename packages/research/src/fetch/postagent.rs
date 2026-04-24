@@ -1,4 +1,4 @@
-//! Spawn `postagent send --anonymous <api_url>` and interpret its output.
+//! Spawn `postagent send <api_url>` and interpret its output.
 //!
 //! Real postagent contract (verified L1 contract smoke, 2026-04-19):
 //! - No `--json` flag — postagent's stdout IS the HTTP response body.
@@ -6,11 +6,11 @@
 //!   stdout/stderr split.
 //! - Success: stdout = raw body, stderr empty.
 //! - HTTP 4xx/5xx: stdout empty, stderr contains line like
-//!     `⚠ 404 — endpoint does not exist at <url>`
-//!     followed by `HTTP <code> <phrase>` and the response body echoed.
+//!   `⚠ 404 — endpoint does not exist at <url>`
+//!   followed by `HTTP <code> <phrase>` and the response body echoed.
 //! - Network failure (DNS, connection refused): stderr has
-//!     `⚠ connection failed — DNS lookup or connect refused for <url>`
-//!     and stdout is empty.
+//!   `⚠ connection failed — DNS lookup or connect refused for <url>`
+//!   and stdout is empty.
 //!
 //! URL passed as argv — never via shell. Stdout capped at 16 MiB.
 
@@ -29,12 +29,18 @@ pub fn binary() -> String {
 /// Run postagent. `api_url` is the full HTTP URL the subprocess will GET.
 /// Returns RawFetch; caller inspects stdout/stderr to determine success.
 pub fn run(api_url: &str, timeout_ms: u64) -> Result<RawFetch, String> {
+    run_args(&["send".to_string(), api_url.to_string()], timeout_ms)
+}
+
+/// Run postagent with explicit argv after the binary name, e.g.
+/// `["send", "https://api.github.com/...", "-H", "Authorization: ..."]`.
+/// This is needed for token-bearing API hands; routing templates are parsed
+/// by the fetch layer and passed here without invoking a shell.
+pub fn run_args(args: &[String], timeout_ms: u64) -> Result<RawFetch, String> {
     let bin = binary();
     let start = Instant::now();
     let mut child = Command::new(&bin)
-        .arg("send")
-        .arg("--anonymous")
-        .arg(api_url) // argv — no shell
+        .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -45,8 +51,14 @@ pub fn run(api_url: &str, timeout_ms: u64) -> Result<RawFetch, String> {
             _ => format!("spawn postagent: {e}"),
         })?;
 
-    let mut stdout = child.stdout.take().ok_or_else(|| "no stdout pipe".to_string())?;
-    let mut stderr = child.stderr.take().ok_or_else(|| "no stderr pipe".to_string())?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "no stdout pipe".to_string())?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "no stderr pipe".to_string())?;
     let deadline = start + Duration::from_millis(timeout_ms);
 
     let stdout_handle = std::thread::spawn(move || {
@@ -88,7 +100,9 @@ pub fn run(api_url: &str, timeout_ms: u64) -> Result<RawFetch, String> {
         }
     };
 
-    let stdout_result = stdout_handle.join().map_err(|_| "stdout thread panicked".to_string())?;
+    let stdout_result = stdout_handle
+        .join()
+        .map_err(|_| "stdout thread panicked".to_string())?;
     let raw_stdout = stdout_result.map_err(|_| {
         format!(
             "postagent stdout exceeded {} MiB cap",
@@ -156,10 +170,10 @@ fn extract_http_status(stderr: &str) -> Option<i32> {
         let rest = t.strip_prefix("⚠").or_else(|| t.strip_prefix("⚠ "))?.trim();
         // first token should be the status code
         let first_word = rest.split_whitespace().next()?;
-        if let Ok(n) = first_word.parse::<i32>() {
-            if (100..600).contains(&n) {
-                return Some(n);
-            }
+        if let Ok(n) = first_word.parse::<i32>()
+            && (100..600).contains(&n)
+        {
+            return Some(n);
         }
     }
     None
@@ -209,13 +223,7 @@ mod tests {
 
     #[test]
     fn extract_http_status_matches_warning_lines() {
-        assert_eq!(
-            extract_http_status("⚠ 500 — server error"),
-            Some(500)
-        );
-        assert_eq!(
-            extract_http_status("⚠ connection failed — refused"),
-            None
-        );
+        assert_eq!(extract_http_status("⚠ 500 — server error"), Some(500));
+        assert_eq!(extract_http_status("⚠ connection failed — refused"), None);
     }
 }

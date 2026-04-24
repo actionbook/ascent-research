@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use crate::output::Envelope;
 use crate::session::{
     active, config,
-    event::{read_events, SessionEvent},
+    event::{FactCheckOutcome, SessionEvent, read_events},
     layout, md_parser, wiki,
 };
 
@@ -95,6 +95,45 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     let sources_referenced_in_body = accepted.intersection(&body_links).count();
     let sources_unused = accepted.difference(&body_links).count();
     let sources_hallucinated = body_links.difference(&accepted).count();
+    let digested: HashSet<String> = events
+        .iter()
+        .filter_map(|ev| match ev {
+            SessionEvent::SourceDigested { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .collect();
+    let cfg = config::read(&slug).ok();
+    let fact_check_required = cfg
+        .as_ref()
+        .map(|c| c.tags.iter().any(|tag| tag == "fact-check"))
+        .unwrap_or(false);
+    let mut fact_checks_total = 0usize;
+    let mut fact_checks_supported = 0usize;
+    let mut fact_checks_refuted = 0usize;
+    let mut fact_checks_uncertain = 0usize;
+    let mut fact_check_invalid_sources = 0usize;
+    let mut fact_check_undigested_sources = 0usize;
+    for ev in &events {
+        if let SessionEvent::FactChecked {
+            sources, outcome, ..
+        } = ev
+        {
+            fact_checks_total += 1;
+            match outcome {
+                FactCheckOutcome::Supported => fact_checks_supported += 1,
+                FactCheckOutcome::Refuted => fact_checks_refuted += 1,
+                FactCheckOutcome::Uncertain => fact_checks_uncertain += 1,
+            }
+            for source in sources {
+                if !accepted.contains(source) {
+                    fact_check_invalid_sources += 1;
+                }
+                if !digested.contains(source) {
+                    fact_check_undigested_sources += 1;
+                }
+            }
+        }
+    }
 
     // ── report_ready evaluation ───────────────────────────────────────────
     let mut blockers = Vec::new();
@@ -114,9 +153,7 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
         ));
     }
     if aside_count > MAX_ASIDES {
-        blockers.push(format!(
-            "aside_count {aside_count} > {MAX_ASIDES}"
-        ));
+        blockers.push(format!("aside_count {aside_count} > {MAX_ASIDES}"));
     }
     if diagrams_referenced < MIN_DIAGRAMS {
         blockers.push(format!(
@@ -134,9 +171,7 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
         ));
     }
     if sources_hallucinated > 0 {
-        blockers.push(format!(
-            "sources_hallucinated {sources_hallucinated} > 0"
-        ));
+        blockers.push(format!("sources_hallucinated {sources_hallucinated} > 0"));
     }
     // Every user-accepted source must be digested and cited in the body.
     // The agent has no authority to silently skip a URL the user curated —
@@ -147,6 +182,25 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
         blockers.push(format!(
             "sources_unused {sources_unused} > 0 — every accepted source must be digested and cited in the body"
         ));
+    }
+    if fact_check_required && fact_checks_total < 1 {
+        blockers.push("fact_checks_total 0 < 1".to_string());
+    }
+    if fact_check_required && fact_check_invalid_sources > 0 {
+        blockers.push(format!(
+            "fact_check_invalid_sources {fact_check_invalid_sources} > 0"
+        ));
+    }
+    if fact_check_required && fact_check_undigested_sources > 0 {
+        blockers.push(format!(
+            "fact_check_undigested_sources {fact_check_undigested_sources} > 0"
+        ));
+    }
+    if fact_check_required && fact_checks_refuted > 0 {
+        blockers.push(format!("fact_checks_refuted {fact_checks_refuted} > 0"));
+    }
+    if fact_check_required && fact_checks_uncertain > 0 {
+        blockers.push(format!("fact_checks_uncertain {fact_checks_uncertain} > 0"));
     }
 
     let report_ready = blockers.is_empty();
@@ -164,6 +218,13 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             "sources_referenced_in_body": sources_referenced_in_body,
             "sources_unused": sources_unused,
             "sources_hallucinated": sources_hallucinated,
+            "fact_checks_total": fact_checks_total,
+            "fact_checks_supported": fact_checks_supported,
+            "fact_checks_refuted": fact_checks_refuted,
+            "fact_checks_uncertain": fact_checks_uncertain,
+            "fact_check_required": fact_check_required,
+            "fact_check_invalid_sources": fact_check_invalid_sources,
+            "fact_check_undigested_sources": fact_check_undigested_sources,
             "wiki_pages": wiki_stats.pages,
             "wiki_pages_with_frontmatter": wiki_stats.pages_with_frontmatter,
             "wiki_total_bytes": wiki_stats.total_bytes,
@@ -265,9 +326,7 @@ fn count_numbered_sections(md: &str) -> usize {
 
 fn numbered_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^## \d{1,2}\s*·\s*\S.*$").expect("numbered heading regex")
-    })
+    RE.get_or_init(|| Regex::new(r"^## \d{1,2}\s*·\s*\S.*$").expect("numbered heading regex"))
 }
 
 fn count_asides(md: &str) -> usize {
@@ -279,9 +338,7 @@ fn count_asides(md: &str) -> usize {
 
 fn aside_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?m)^>\s*\*\*aside:\*\*").expect("aside regex")
-    })
+    RE.get_or_init(|| Regex::new(r"(?m)^>\s*\*\*aside:\*\*").expect("aside regex"))
 }
 
 fn count_diagram_refs(md: &str) -> usize {
@@ -302,7 +359,10 @@ fn count_diagrams_resolved(slug: &str, md: &str) -> usize {
 /// Collect every `![alt](diagrams/foo.svg)` relative path. Only matches
 /// the exact `diagrams/…` prefix and `.svg` extension.
 fn diagram_ref_paths(md: &str) -> Vec<String> {
-    diagram_refs_with_alt(md).into_iter().map(|(p, _)| p).collect()
+    diagram_refs_with_alt(md)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
 }
 
 /// Same but also surfaces the `![alt](diagrams/x.svg)` alt text so the
@@ -327,7 +387,10 @@ pub(crate) fn diagram_refs_with_alt(md: &str) -> Vec<(String, String)> {
 /// references; default builds don't see any call site.
 #[cfg_attr(not(feature = "autoresearch"), allow(dead_code))]
 pub(crate) fn diagram_path_resolved(slug: &str, rel: &str) -> bool {
-    layout::session_dir(slug).join("diagrams").join(rel).is_file()
+    layout::session_dir(slug)
+        .join("diagrams")
+        .join(rel)
+        .is_file()
 }
 
 fn diagram_re() -> &'static Regex {

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Instant;
 
+use crate::commands::coverage;
 use crate::output::Envelope;
 use crate::report::builder::{self, BuildError, ReportInput};
 use crate::report::markdown::{self, RenderError};
@@ -57,6 +58,10 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
         &slug,
         &SessionEvent::SynthesizeStarted {
             timestamp: Utc::now(),
+            no_render,
+            open,
+            bilingual,
+            bilingual_provider: requested_bilingual_provider(bilingual),
             note: None,
         },
     );
@@ -87,6 +92,69 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
             .with_context(json!({ "session": slug }));
         }
     };
+
+    let coverage = coverage::run(Some(&slug));
+    if !coverage.ok {
+        let (reason, details) = if let Some(err) = coverage.error {
+            (
+                format!("coverage preflight failed: {}", err.message),
+                err.details,
+            )
+        } else {
+            (
+                "coverage preflight failed".to_string(),
+                serde_json::Value::Null,
+            )
+        };
+        let _ = log::append(
+            &slug,
+            &SessionEvent::SynthesizeFailed {
+                timestamp: Utc::now(),
+                stage: SynthesizeStage::Build,
+                reason: reason.clone(),
+                note: None,
+            },
+        );
+        let mut env =
+            Envelope::fail(CMD, "IO_ERROR", reason).with_context(json!({ "session": slug }));
+        if !details.is_null() {
+            env = env.with_details(details);
+        }
+        return env;
+    }
+    if coverage.data["report_ready"] != json!(true) {
+        let blockers = coverage.data["report_ready_blockers"].clone();
+        let blocker_summary = blockers
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "coverage did not report blockers".to_string());
+        let _ = log::append(
+            &slug,
+            &SessionEvent::SynthesizeFailed {
+                timestamp: Utc::now(),
+                stage: SynthesizeStage::Build,
+                reason: format!("report not ready: {blocker_summary}"),
+                note: None,
+            },
+        );
+        return Envelope::fail(
+            CMD,
+            "REPORT_NOT_READY",
+            "session does not satisfy `research coverage` gates — fix blockers and retry",
+        )
+        .with_context(json!({ "session": slug }))
+        .with_details(json!({
+            "report_ready": coverage.data["report_ready"].clone(),
+            "report_ready_blockers": blockers,
+        }));
+    }
 
     let report_json_path = layout::session_report_json(&slug);
     let serialized = match serde_json::to_string_pretty(&built.json) {
@@ -122,12 +190,14 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
     // that `research report --format rich-html` produces, so there is a
     // single canonical report template across the project.
     let mut report_html_path: Option<String> = None;
+    let mut report_html_abs: Option<PathBuf> = None;
     let mut render_error: Option<String> = None;
     let mut render_warnings: Vec<String> = Vec::new();
     if !no_render {
         match render_rich_html(&slug, &md, &cfg.topic, &cfg.tags, &cfg.preset, bilingual) {
             Ok((html_path, warnings)) => {
                 report_html_path = Some(rel_path(&html_path));
+                report_html_abs = Some(html_path);
                 render_warnings = warnings;
             }
             Err(e) => render_error = Some(e),
@@ -168,7 +238,8 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
             open_skipped = Some("non-interactive environment");
             eprintln!("skipping open (non-interactive)");
         } else if let Some(html) = &report_html_path {
-            let html_abs = layout::session_dir(&slug).join(html.trim_start_matches(&format!("{slug}/")));
+            let html_abs =
+                layout::session_dir(&slug).join(html.trim_start_matches(&format!("{slug}/")));
             let spawn_result = if cfg!(target_os = "macos") {
                 Command::new("open").arg(&html_abs).spawn()
             } else {
@@ -192,6 +263,11 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
 
     let mut all_warnings = built.warnings.clone();
     all_warnings.extend(render_warnings);
+    let bilingual_provider = requested_bilingual_provider(bilingual);
+    let zh_paragraphs = report_html_abs
+        .as_ref()
+        .and_then(|path| count_zh_paragraphs(path).ok());
+    let bilingual_status = bilingual_status(bilingual, zh_paragraphs, &all_warnings);
 
     Envelope::ok(
         CMD,
@@ -202,6 +278,12 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
             "rejected_sources": built.rejected_count,
             "duration_ms": duration_ms,
             "open_skipped": open_skipped,
+            "bilingual": {
+                "requested": bilingual,
+                "provider": bilingual_provider,
+                "status": bilingual_status,
+                "zh_paragraphs": zh_paragraphs,
+            },
             "warnings": all_warnings,
         }),
     )
@@ -240,7 +322,10 @@ fn render_rich_html(
     })?;
     warnings.extend(wiki.warnings.iter().cloned());
     if wiki.broken_links > 0 {
-        warnings.push(format!("broken_wiki_links: {} — see coverage", wiki.broken_links));
+        warnings.push(format!(
+            "broken_wiki_links: {} — see coverage",
+            wiki.broken_links
+        ));
     }
 
     // v3: render any SVG files that exist in `<session>/diagrams/` but
@@ -249,7 +334,7 @@ fn render_rich_html(
     // pair with `![alt](diagrams/x.svg)` stays invisible in the report.
     // tokio-v3 smoke caught this — `task-lifecycle.svg` (5.5 KB) was on
     // disk but silent.
-    let orphan_diagrams_html = render_orphan_diagrams(slug, &session_dir, &md);
+    let orphan_diagrams_html = render_orphan_diagrams(slug, &session_dir, md);
 
     let combined_body = match (wiki.page_count, orphan_diagrams_html.is_empty()) {
         (0, true) => rendered.body_html.clone(),
@@ -283,9 +368,7 @@ fn render_rich_html(
     } else {
         format!(" · tagged {}", tags.join(", "))
     };
-    let subtitle = format!(
-        "Session: <code>{slug}</code>{tags_str} · preset <code>{preset}</code>"
-    );
+    let subtitle = format!("Session: <code>{slug}</code>{tags_str} · preset <code>{preset}</code>");
     let session_footer = format!(
         "Session · {} · {} accepted source{} · {} bytes",
         session_dir.display(),
@@ -318,6 +401,58 @@ fn should_skip_open() -> bool {
         return true;
     }
     !std::io::stdin().is_terminal()
+}
+
+fn requested_bilingual_provider(bilingual: bool) -> Option<String> {
+    if !bilingual {
+        return None;
+    }
+    Some(
+        std::env::var("ASR_BILINGUAL_PROVIDER")
+            .or_else(|_| std::env::var("ASCENT_RESEARCH_BILINGUAL_PROVIDER"))
+            .unwrap_or_else(|_| default_bilingual_provider().to_string()),
+    )
+}
+
+fn default_bilingual_provider() -> &'static str {
+    #[cfg(feature = "provider-claude")]
+    {
+        "claude"
+    }
+    #[cfg(all(not(feature = "provider-claude"), feature = "provider-codex"))]
+    {
+        "codex"
+    }
+    #[cfg(not(any(feature = "provider-claude", feature = "provider-codex")))]
+    {
+        "none"
+    }
+}
+
+fn count_zh_paragraphs(path: &std::path::Path) -> Result<usize, std::io::Error> {
+    let html = fs::read_to_string(path)?;
+    Ok(html.matches(r#"class="tr-zh""#).count() + html.matches(r#"class='tr-zh'"#).count())
+}
+
+fn bilingual_status(
+    requested: bool,
+    zh_paragraphs: Option<usize>,
+    warnings: &[String],
+) -> &'static str {
+    if !requested {
+        return "not_requested";
+    }
+    if warnings
+        .iter()
+        .any(|warning| warning.starts_with("bilingual_skipped:"))
+    {
+        return "skipped";
+    }
+    match zh_paragraphs {
+        Some(n) if n > 0 => "complete",
+        Some(_) => "missing_zh",
+        None => "unknown",
+    }
 }
 
 /// Scan `<session>/diagrams/` for `.svg` files that aren't referenced
@@ -353,11 +488,11 @@ fn render_orphan_diagrams(_slug: &str, session_dir: &std::path::Path, md: &str) 
     let mut all_text = md.to_string();
     if let Ok(entries) = fs::read_dir(session_dir.join("wiki")) {
         for e in entries.flatten() {
-            if e.path().extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok(body) = fs::read_to_string(e.path()) {
-                    all_text.push('\n');
-                    all_text.push_str(&body);
-                }
+            if e.path().extension().and_then(|s| s.to_str()) == Some("md")
+                && let Ok(body) = fs::read_to_string(e.path())
+            {
+                all_text.push('\n');
+                all_text.push_str(&body);
             }
         }
     }
@@ -380,7 +515,10 @@ fn render_orphan_diagrams(_slug: &str, session_dir: &std::path::Path, md: &str) 
         if svg.len() > 512 * 1024 {
             continue;
         }
-        let caption = fname.strip_suffix(".svg").unwrap_or(fname).replace('-', " ");
+        let caption = fname
+            .strip_suffix(".svg")
+            .unwrap_or(fname)
+            .replace('-', " ");
         out.push_str(r#"<div class="diagram">"#);
         out.push_str(&svg);
         out.push_str(&format!("<p class=\"caption\">{caption}</p>"));

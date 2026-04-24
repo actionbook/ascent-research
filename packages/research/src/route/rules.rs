@@ -13,7 +13,7 @@
 //! query_param = { id = "[0-9]+" }         # optional; each value is a Rust regex,
 //!                                          # implicitly anchored to full value
 //! executor = "postagent"                  # or "browser"
-//! template = 'postagent send --anonymous "..."'
+//! template = 'postagent send "..."'
 //!
 //! [fallback]
 //! executor = "browser"
@@ -153,7 +153,9 @@ pub enum Classification {
 impl Classification {
     pub fn route(&self) -> &Route {
         match self {
-            Classification::Matched(r) | Classification::Fallback(r) | Classification::Forced(r) => r,
+            Classification::Matched(r)
+            | Classification::Fallback(r)
+            | Classification::Forced(r) => r,
         }
     }
 }
@@ -199,13 +201,18 @@ impl std::error::Error for PresetError {}
 
 // ── Loading ─────────────────────────────────────────────────────────────────
 
-const BUILTIN_TECH: &str = include_str!("../../../../presets/tech.toml");
+const BUILTIN_TECH: &str = include_str!("../../presets/tech.toml");
+const BUILTIN_SPORTS: &str = include_str!("../../presets/sports.toml");
 
 /// Load and compile a preset, honoring resolution order:
 /// 1. `rules_path` (explicit file) if provided
 /// 2. Otherwise, `preset` name:
-///    a. `~/.actionbook/research/presets/<name>.toml` (user override)
-///    b. built-in (currently only "tech" shipped embedded)
+///    - `<research_root>/presets/<name>.toml` (user override under the
+///      canonical `~/.actionbook/ascent-research/` home)
+///    - `~/.actionbook/research/presets/<name>.toml` (legacy v0.2 path,
+///      read-only with a one-shot warning so upgraded users don't lose
+///      their existing overrides)
+///    - built-in presets shipped embedded
 pub fn load_preset(
     preset: Option<&str>,
     rules_path: Option<&Path>,
@@ -221,24 +228,51 @@ pub fn load_preset(
 
     let name = preset.unwrap_or("tech");
 
-    // user override lookup
-    if let Some(home) = dirs::home_dir() {
-        let user_path = home
+    // Canonical v0.3+ location: <research_root>/presets/<name>.toml. This
+    // follows `ACTIONBOOK_RESEARCH_HOME` if set, so tests and sandboxes
+    // stay isolated.
+    let user_path = crate::session::layout::research_root()
+        .join("presets")
+        .join(format!("{name}.toml"));
+    if user_path.exists() {
+        let text = std::fs::read_to_string(&user_path).map_err(|e| PresetError {
+            sub_code: PresetSubCode::FileNotFound,
+            message: format!("cannot read user preset: {e}"),
+            path: Some(user_path.display().to_string()),
+        })?;
+        return parse_and_compile(&text, Some(user_path.display().to_string()));
+    }
+
+    // Legacy v0.2 fallback: `~/.actionbook/research/presets/<name>.toml`.
+    // Read-only — nothing ever writes here after v0.3. Emit a one-shot
+    // stderr notice so the user knows to move it. Honors the same
+    // `ACTIONBOOK_RESEARCH_HOME` escape the session layout uses: when
+    // that override is set, we skip the legacy path entirely.
+    if std::env::var("ACTIONBOOK_RESEARCH_HOME").is_err()
+        && let Some(home) = dirs::home_dir()
+    {
+        let legacy_path = home
             .join(".actionbook/research/presets")
             .join(format!("{name}.toml"));
-        if user_path.exists() {
-            let text = std::fs::read_to_string(&user_path).map_err(|e| PresetError {
+        if legacy_path.exists() {
+            eprintln!(
+                "warning: using legacy preset at {} — move to {} to silence this notice (legacy path will be removed in v0.4)",
+                legacy_path.display(),
+                user_path.display()
+            );
+            let text = std::fs::read_to_string(&legacy_path).map_err(|e| PresetError {
                 sub_code: PresetSubCode::FileNotFound,
                 message: format!("cannot read user preset: {e}"),
-                path: Some(user_path.display().to_string()),
+                path: Some(legacy_path.display().to_string()),
             })?;
-            return parse_and_compile(&text, Some(user_path.display().to_string()));
+            return parse_and_compile(&text, Some(legacy_path.display().to_string()));
         }
     }
 
     // built-in
     match name {
         "tech" => parse_and_compile(BUILTIN_TECH, Some("<builtin:tech>".to_string())),
+        "sports" => parse_and_compile(BUILTIN_SPORTS, Some("<builtin:sports>".to_string())),
         other => Err(PresetError {
             sub_code: PresetSubCode::FileNotFound,
             message: format!("no preset named '{other}' (ship your own TOML with --rules)"),
@@ -269,16 +303,16 @@ fn compile(p: Preset, src: Option<String>) -> Result<CompiledPreset, PresetError
     })
 }
 
-fn compile_rule(
-    r: &RuleSpec,
-    idx: usize,
-    src: Option<&str>,
-) -> Result<CompiledRule, PresetError> {
+fn compile_rule(r: &RuleSpec, idx: usize, src: Option<&str>) -> Result<CompiledRule, PresetError> {
     // Validate path-matcher kind
-    let matcher_specified = [r.path.is_some(), r.path_any_of.is_some(), r.path_segments.is_some()]
-        .iter()
-        .filter(|x| **x)
-        .count();
+    let matcher_specified = [
+        r.path.is_some(),
+        r.path_any_of.is_some(),
+        r.path_segments.is_some(),
+    ]
+    .iter()
+    .filter(|x| **x)
+    .count();
     if matcher_specified != 1 {
         return Err(PresetError {
             sub_code: PresetSubCode::SchemaInvalid,
@@ -314,9 +348,11 @@ fn compile_rule(
             .collect();
 
         // VarCapture must only appear as the last segment.
-        if let Some(bad_idx) = segs.iter().enumerate().position(|(i, p)| {
-            matches!(p, SegmentPattern::VarCapture(_)) && i != segs.len() - 1
-        }) {
+        if let Some(bad_idx) = segs
+            .iter()
+            .enumerate()
+            .position(|(i, p)| matches!(p, SegmentPattern::VarCapture(_)) && i != segs.len() - 1)
+        {
             return Err(PresetError {
                 sub_code: PresetSubCode::SchemaInvalid,
                 message: format!(
@@ -338,7 +374,10 @@ fn compile_rule(
             let anchored = format!("^(?:{pat})$");
             let re = Regex::new(&anchored).map_err(|e| PresetError {
                 sub_code: PresetSubCode::SchemaInvalid,
-                message: format!("rule[{idx}] (kind={}) query_param.{k}: invalid regex: {e}", r.kind),
+                message: format!(
+                    "rule[{idx}] (kind={}) query_param.{k}: invalid regex: {e}",
+                    r.kind
+                ),
                 path: src.map(String::from),
             })?;
             query_regexes.push((k.clone(), re));
@@ -409,15 +448,15 @@ fn extract_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'}') {
-                let name = &template[i + 1..i + 1 + end];
-                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    out.push(name.to_string());
-                }
-                i += end + 2;
-                continue;
+        if bytes[i] == b'{'
+            && let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'}')
+        {
+            let name = &template[i + 1..i + 1 + end];
+            if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                out.push(name.to_string());
             }
+            i += end + 2;
+            continue;
         }
         i += 1;
     }
@@ -491,13 +530,17 @@ pub fn classify(
         return Ok(Classification::Matched(route));
     }
 
-    let parsed = ParsedUrl::parse(url).ok_or_else(|| format!("cannot parse '{url}' as http(s) URL"))?;
+    let parsed =
+        ParsedUrl::parse(url).ok_or_else(|| format!("cannot parse '{url}' as http(s) URL"))?;
 
     if prefer_browser {
         let route = Route {
             executor: Executor::Browser,
             kind: "browser-forced".into(),
-            command_template: interpolate(&preset.fallback.template, &url_to_map(url, &parsed, &HashMap::new())),
+            command_template: interpolate(
+                &preset.fallback.template,
+                &url_to_map(url, &parsed, &HashMap::new()),
+            ),
             url: url.into(),
         };
         return Ok(Classification::Forced(route));
@@ -572,11 +615,12 @@ fn normalize_local_path(input: &str) -> Option<std::path::PathBuf> {
             Some(i) => rest[i..].to_string(),
             None => return None,
         }
-    } else if input.starts_with('/') || input.starts_with("./") || input.starts_with("../")
-    {
+    } else if input.starts_with('/') || input.starts_with("./") || input.starts_with("../") {
         input.to_string()
     } else if let Some(rest) = input.strip_prefix("~/") {
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok()?;
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok()?;
         format!("{home}/{rest}")
     } else {
         return None;
@@ -602,7 +646,7 @@ fn match_rule(rule: &CompiledRule, parsed: &ParsedUrl) -> Option<HashMap<String,
             }
         }
         PathMatcher::AnyOf(list) => {
-            if !list.iter().any(|p| *p == parsed.path) {
+            if !list.contains(&parsed.path) {
                 return None;
             }
         }
@@ -622,7 +666,10 @@ fn match_rule(rule: &CompiledRule, parsed: &ParsedUrl) -> Option<HashMap<String,
                     return None;
                 }
                 let fixed_count = patterns.len() - 1;
-                for (pat, seg) in patterns[..fixed_count].iter().zip(segs[..fixed_count].iter()) {
+                for (pat, seg) in patterns[..fixed_count]
+                    .iter()
+                    .zip(segs[..fixed_count].iter())
+                {
                     match pat {
                         SegmentPattern::Literal(lit) => {
                             if lit != seg {
@@ -691,14 +738,14 @@ fn interpolate(template: &str, vars: &HashMap<String, String>) -> String {
     let bytes = template.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'{' {
-            if let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'}') {
-                let name = &template[i + 1..i + 1 + end];
-                if let Some(val) = vars.get(name) {
-                    out.push_str(val);
-                    i += end + 2;
-                    continue;
-                }
+        if bytes[i] == b'{'
+            && let Some(end) = bytes[i + 1..].iter().position(|&b| b == b'}')
+        {
+            let name = &template[i + 1..i + 1 + end];
+            if let Some(val) = vars.get(name) {
+                out.push_str(val);
+                i += end + 2;
+                continue;
             }
         }
         out.push(bytes[i] as char);
@@ -717,6 +764,10 @@ mod tests {
         load_preset(Some("tech"), None).expect("builtin tech must load")
     }
 
+    fn sports() -> CompiledPreset {
+        load_preset(Some("sports"), None).expect("builtin sports must load")
+    }
+
     #[test]
     fn builtin_tech_loads() {
         let p = tech();
@@ -725,12 +776,22 @@ mod tests {
     }
 
     #[test]
+    fn builtin_sports_loads() {
+        let p = sports();
+        assert_eq!(p.name, "sports");
+        assert!(!p.rules.is_empty());
+    }
+
+    #[test]
     fn hn_item_route() {
         let c = classify(&tech(), "https://news.ycombinator.com/item?id=12345", false).unwrap();
         let r = c.route();
-        assert_eq!(r.executor, Executor::Postagent);
+        assert_eq!(r.executor, Executor::Browser);
         assert_eq!(r.kind, "hn-item");
-        assert!(r.command_template.contains("/v0/item/12345.json"));
+        assert!(
+            r.command_template
+                .contains("news.ycombinator.com/item?id=12345")
+        );
     }
 
     #[test]
@@ -754,21 +815,44 @@ mod tests {
     fn github_repo_readme() {
         let c = classify(&tech(), "https://github.com/bytedance/monoio", false).unwrap();
         assert_eq!(c.route().kind, "github-repo-readme");
-        assert!(c.route().command_template.contains("/repos/bytedance/monoio/readme"));
+        assert!(
+            c.route()
+                .command_template
+                .contains("/repos/bytedance/monoio/readme")
+        );
     }
 
     #[test]
     fn github_issue() {
-        let c = classify(&tech(), "https://github.com/tokio-rs/tokio/issues/8056", false).unwrap();
+        let c = classify(
+            &tech(),
+            "https://github.com/tokio-rs/tokio/issues/8056",
+            false,
+        )
+        .unwrap();
         assert_eq!(c.route().kind, "github-issue");
-        assert!(c.route().command_template.contains("/repos/tokio-rs/tokio/issues/8056"));
+        assert!(
+            c.route()
+                .command_template
+                .contains("/repos/tokio-rs/tokio/issues/8056")
+        );
+        assert!(
+            c.route()
+                .command_template
+                .contains("$POSTAGENT.GITHUB.TOKEN")
+        );
     }
 
     #[test]
     fn arxiv_abs() {
         let c = classify(&tech(), "https://arxiv.org/abs/2601.12345", false).unwrap();
         assert_eq!(c.route().kind, "arxiv-abs");
-        assert!(c.route().command_template.contains("id_list=2601.12345"));
+        assert_eq!(c.route().executor, Executor::Browser);
+        assert!(
+            c.route()
+                .command_template
+                .contains("arxiv.org/abs/2601.12345")
+        );
     }
 
     #[test]
@@ -850,11 +934,11 @@ template = "fb"
         )
         .unwrap();
         assert_eq!(c.route().kind, "github-file");
-        assert_eq!(c.route().executor, Executor::Postagent);
+        assert_eq!(c.route().executor, Executor::Browser);
         assert!(
-            c.route()
-                .command_template
-                .contains("raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/runtime/mod.rs"),
+            c.route().command_template.contains(
+                "raw.githubusercontent.com/tokio-rs/tokio/master/tokio/src/runtime/mod.rs"
+            ),
             "got: {}",
             c.route().command_template
         );
@@ -869,10 +953,16 @@ template = "fb"
         )
         .unwrap();
         assert_eq!(c.route().kind, "github-tree");
-        assert!(c
-            .route()
-            .command_template
-            .contains("api.github.com/repos/tokio-rs/tokio/contents/tokio/src/runtime?ref=master"));
+        assert!(
+            c.route().command_template.contains(
+                "api.github.com/repos/tokio-rs/tokio/contents/tokio/src/runtime?ref=master"
+            )
+        );
+        assert!(
+            c.route()
+                .command_template
+                .contains("$POSTAGENT.GITHUB.TOKEN")
+        );
     }
 
     #[test]
@@ -884,10 +974,11 @@ template = "fb"
         )
         .unwrap();
         assert_eq!(c.route().kind, "github-tree");
-        assert!(c
-            .route()
-            .command_template
-            .contains("api.github.com/repos/tokio-rs/tokio/contents/?ref=master"));
+        assert!(
+            c.route()
+                .command_template
+                .contains("api.github.com/repos/tokio-rs/tokio/contents/?ref=master")
+        );
     }
 
     #[test]
@@ -899,10 +990,12 @@ template = "fb"
         )
         .unwrap();
         assert_eq!(c.route().kind, "github-raw");
-        assert!(c
-            .route()
-            .command_template
-            .contains("raw.githubusercontent.com/rust-lang/rust/master/README.md"));
+        assert_eq!(c.route().executor, Executor::Browser);
+        assert!(
+            c.route()
+                .command_template
+                .contains("raw.githubusercontent.com/rust-lang/rust/master/README.md")
+        );
     }
 
     #[test]
@@ -1025,12 +1118,7 @@ template = "fb"
 
     #[test]
     fn does_not_misclassify_https_as_local() {
-        let c = classify(
-            &test_preset_for_local(),
-            "https://example.com/x",
-            false,
-        )
-        .unwrap();
+        let c = classify(&test_preset_for_local(), "https://example.com/x", false).unwrap();
         // Should fall through to the rule / fallback, not Local.
         assert_ne!(c.route().executor, Executor::Local);
     }

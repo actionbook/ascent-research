@@ -18,7 +18,11 @@ pub fn get_active() -> Option<String> {
     let mut s = String::new();
     File::open(&p).ok()?.read_to_string(&mut s).ok()?;
     let t = s.trim();
-    if t.is_empty() { None } else { Some(t.to_string()) }
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 /// Replace active slug atomically. Creates the research root if missing.

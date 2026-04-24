@@ -4,6 +4,21 @@ version = "0.3.0"
 edition = "2024"
 description = "ascent-research — an incremental research workflow CLI for AI agents. Every session resumes; knowledge accretes across runs. Mixes HTTP, browser, and local file ingest into a durable per-session wiki + figure-rich HTML report."
 license = "MIT"
+repository = "https://github.com/actionbook/ascent-research"
+homepage = "https://github.com/actionbook/ascent-research"
+readme = "../../README.md"
+keywords = ["research", "cli", "agent", "llm", "wiki"]
+categories = ["command-line-utilities", "development-tools"]
+# Keep the published crate small: include only what the binary needs at
+# build time. `presets/tech.toml` is pulled in via `include_str!` from
+# `src/route/rules.rs`, so it must be listed too.
+include = [
+    "src/**/*",
+    "presets/tech.toml",
+    "presets/sports.toml",
+    "templates/**/*",
+    "../../README.md",
+]
 
 [[bin]]
 name = "ascent-research"
@@ -33,7 +48,11 @@ tokio = { version = "1", features = ["rt", "macros", "process", "io-util", "time
 cc-sdk = { version = "0.8", optional = true }
 
 [features]
-default = []
+# `cargo install ascent-research` ships with the autonomous loop built in
+# — every playbook in the skill assumes `ascent-research loop` exists.
+# The fake provider alone is useful for manual debug; real LLM providers
+# remain opt-in because `cc-sdk` and `codex` pull heavy deps.
+default = ["autoresearch"]
 # Umbrella feature: enables the `research loop` and `research plan` commands
 # plus the AgentProvider trait. Does NOT by itself include a provider impl.
 autoresearch = ["dep:async-trait", "dep:tokio"]

@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 
 use chrono::{Duration, NaiveDate, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::output::Envelope;
 use crate::session::{active, config, event::SessionEvent, layout, log, wiki};
@@ -54,8 +54,11 @@ pub fn run(slug_arg: Option<&str>, stale_days: Option<i64>) -> Envelope {
     let kind_conflicts = find_kind_conflicts(&bodies);
     let suggested_new_pages: Vec<Value> = Vec::new();
 
-    let issues =
-        orphans.len() + broken_links.len() + stale.len() + missing_crossrefs.len() + kind_conflicts.len();
+    let issues = orphans.len()
+        + broken_links.len()
+        + stale.len()
+        + missing_crossrefs.len()
+        + kind_conflicts.len();
 
     let ev = SessionEvent::WikiLintRan {
         timestamp: Utc::now(),
@@ -84,6 +87,7 @@ pub fn run(slug_arg: Option<&str>, stale_days: Option<i64>) -> Envelope {
     .with_context(json!({ "session": slug }))
 }
 
+#[allow(clippy::result_large_err)]
 fn resolve_slug(slug_arg: Option<&str>) -> Result<String, Envelope> {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -99,8 +103,10 @@ fn resolve_slug(slug_arg: Option<&str>) -> Result<String, Envelope> {
         },
     };
     if !config::exists(&slug) {
-        return Err(Envelope::fail(CMD, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
-            .with_context(json!({ "session": slug })));
+        return Err(
+            Envelope::fail(CMD, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
+                .with_context(json!({ "session": slug })),
+        );
     }
     Ok(slug)
 }
@@ -242,17 +248,17 @@ fn find_kind_conflicts(bodies: &BTreeMap<String, String>) -> Vec<Value> {
         if canon.is_empty() {
             continue;
         }
-        groups.entry(canon).or_default().push((slug.clone(), fm.kind));
+        groups
+            .entry(canon)
+            .or_default()
+            .push((slug.clone(), fm.kind));
     }
     let mut out: Vec<Value> = Vec::new();
     for (canon, members) in groups {
         if members.len() < 2 {
             continue;
         }
-        let kinds: HashSet<&str> = members
-            .iter()
-            .filter_map(|(_, k)| k.as_deref())
-            .collect();
+        let kinds: HashSet<&str> = members.iter().filter_map(|(_, k)| k.as_deref()).collect();
         if kinds.len() > 1 {
             let slugs: Vec<&str> = members.iter().map(|(s, _)| s.as_str()).collect();
             let kind_list: Vec<&str> = kinds.into_iter().collect();
@@ -273,19 +279,19 @@ fn extract_wiki_links(body: &str) -> Vec<String> {
     let bytes = body.as_bytes();
     let mut i = 0;
     while i + 3 < bytes.len() {
-        if &bytes[i..i + 2] == b"[[" {
-            if let Some(end) = body[i + 2..].find("]]") {
-                let slug = &body[i + 2..i + 2 + end];
-                if !slug.is_empty()
-                    && slug.chars().all(|c| {
-                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
-                    })
-                {
-                    out.push(slug.to_string());
-                }
-                i += 2 + end + 2;
-                continue;
+        if &bytes[i..i + 2] == b"[["
+            && let Some(end) = body[i + 2..].find("]]")
+        {
+            let slug = &body[i + 2..i + 2 + end];
+            if !slug.is_empty()
+                && slug
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                out.push(slug.to_string());
             }
+            i += 2 + end + 2;
+            continue;
         }
         i += 1;
     }
@@ -365,10 +371,7 @@ mod tests {
     #[test]
     fn crossref_already_linked_is_clean() {
         let bodies = bodies_of(&[
-            (
-                "a",
-                "---\nsources: [https://example.com/x]\n---\nsee [[b]]",
-            ),
+            ("a", "---\nsources: [https://example.com/x]\n---\nsee [[b]]"),
             (
                 "b",
                 "---\nsources: [https://example.com/x]\n---\nback to [[a]]",

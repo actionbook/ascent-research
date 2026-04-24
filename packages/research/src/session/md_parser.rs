@@ -92,9 +92,14 @@ pub struct Metric {
     pub suffix: Option<String>,
 }
 
-/// Extract unique `http(s)://…` URLs that appear inside markdown
-/// `[text](url)` link syntax. Used by `research diff` + `research coverage`
-/// to compare "cited in body" against `source_accepted` events.
+/// Extract unique source URLs that appear inside markdown `[text](url)` link
+/// syntax. Used by `research diff` + `research coverage` to compare "cited in
+/// body" against `source_accepted` events.
+///
+/// Only externally fetchable `http(s)://` URLs and local-ingest `file://` URLs
+/// are accepted. Other schemes (`mailto:`, `ftp:`, relative paths) are ignored
+/// so wiki links, images, and arbitrary inline links don't satisfy source
+/// coverage.
 ///
 /// If `exclude_sources_block` is true, content between the CLI-maintained
 /// markers `<!-- research:sources-start -->` and `<!-- research:sources-end -->`
@@ -145,12 +150,15 @@ pub fn extract_http_links(md: &str, exclude_sources_block: bool) -> Vec<String> 
             if let Some(end_rel) = end_rel {
                 let raw = &scanned[start..start + end_rel];
                 // Split off optional `"title"` / `'title'` portion.
-                let url_part = raw.trim().split_whitespace().next().unwrap_or(raw.trim());
+                let raw = raw.trim();
+                let url_part = raw.split_whitespace().next().unwrap_or(raw);
                 let url = url_part.trim();
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    if seen.insert(url.to_string()) {
-                        out.push(url.to_string());
-                    }
+                if (url.starts_with("http://")
+                    || url.starts_with("https://")
+                    || url.starts_with("file://"))
+                    && seen.insert(url.to_string())
+                {
+                    out.push(url.to_string());
                 }
                 i = start + end_rel + 1;
                 continue;
@@ -268,7 +276,8 @@ Long notes here.
 
     #[test]
     fn extract_http_links_finds_inline_refs() {
-        let md = "See [A](https://a.test/) and also [B](http://b.test/x).\n\nNot a link: plain text.\n";
+        let md =
+            "See [A](https://a.test/) and also [B](http://b.test/x).\n\nNot a link: plain text.\n";
         let mut links = extract_http_links(md, false);
         links.sort();
         assert_eq!(
@@ -278,10 +287,10 @@ Long notes here.
     }
 
     #[test]
-    fn extract_http_links_skips_non_http_schemes() {
-        let md = "[a](mailto:x@y) [b](ftp://host) [c](/local/path) [ok](https://ok.test)";
+    fn extract_http_links_skips_non_source_schemes() {
+        let md = "[a](mailto:x@y) [b](ftp://host) [c](/local/path) [ok](https://ok.test) [f](file:///tmp/source.md)";
         let links = extract_http_links(md, false);
-        assert_eq!(links, vec!["https://ok.test"]);
+        assert_eq!(links, vec!["https://ok.test", "file:///tmp/source.md"]);
     }
 
     #[test]
@@ -327,7 +336,8 @@ Long notes here.
 
     #[test]
     fn extract_http_links_handles_nested_parens_with_title() {
-        let md = r#"See [y](https://en.wikipedia.org/wiki/Rust_(programming_language) "Rust lang")."#;
+        let md =
+            r#"See [y](https://en.wikipedia.org/wiki/Rust_(programming_language) "Rust lang")."#;
         let links = extract_http_links(md, false);
         assert_eq!(
             links,

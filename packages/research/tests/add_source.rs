@@ -28,7 +28,11 @@ impl Env {
         let home = tmp.path().to_string_lossy().into_owned();
         let bin_dir = tmp.path().join("_bin");
         fs::create_dir_all(&bin_dir).unwrap();
-        Self { _tmp: tmp, home, bin_dir }
+        Self {
+            _tmp: tmp,
+            home,
+            bin_dir,
+        }
     }
 
     fn write_fake_bin(&self, name: &str, script: &str) -> PathBuf {
@@ -84,6 +88,14 @@ impl Env {
     fn session_dir(&self, slug: &str) -> PathBuf {
         PathBuf::from(&self.home).join(slug)
     }
+
+    fn jsonl_events(&self, slug: &str) -> Vec<Value> {
+        let jsonl = fs::read_to_string(self.session_dir(slug).join("session.jsonl")).unwrap();
+        jsonl
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
 }
 
 // ── Fake subprocess scripts ─────────────────────────────────────────────────
@@ -94,7 +106,8 @@ fn fake_postagent_happy() -> String {
 cat <<'JSON'
 {"title":"Hello","score":100}
 JSON
-"#.to_string()
+"#
+    .to_string()
 }
 
 fn fake_postagent_404() -> String {
@@ -105,14 +118,16 @@ printf '%s\n' '⚠ 404 — endpoint does not exist at https://example.test/missi
 printf '%s\n' 'HTTP 404 Not Found' >&2
 printf '%s\n' '{"message":"Not Found"}' >&2
 exit 0
-"#.to_string()
+"#
+    .to_string()
 }
 
 fn fake_postagent_exit_1() -> String {
     r#"#!/bin/sh
 echo "simulated failure" >&2
 exit 1
-"#.to_string()
+"#
+    .to_string()
 }
 
 fn fake_actionbook_happy(observed_url: &str, body_len: usize) -> String {
@@ -162,7 +177,7 @@ fn add_postagent_happy_path_envelope() {
     let (v, code, stderr) = env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=123",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -173,7 +188,7 @@ fn add_postagent_happy_path_envelope() {
     assert_eq!(code, 0, "stderr: {stderr}; envelope: {v}");
     // Five independent observability fields present:
     assert_eq!(v["data"]["route_decision"]["executor"], "postagent");
-    assert_eq!(v["data"]["route_decision"]["kind"], "hn-item");
+    assert_eq!(v["data"]["route_decision"]["kind"], "github-issue");
     assert_eq!(v["data"]["fetch_success"], true);
     assert_eq!(v["data"]["smell_pass"], true);
     assert!(v["data"]["bytes"].as_u64().unwrap() > 0);
@@ -187,7 +202,9 @@ fn add_postagent_happy_path_envelope() {
             .unwrap()
             .trim_start_matches("raw/"),
     );
-    let raw_candidate_1 = env.session_dir("t1").join(v["data"]["raw_path"].as_str().unwrap());
+    let raw_candidate_1 = env
+        .session_dir("t1")
+        .join(v["data"]["raw_path"].as_str().unwrap());
     assert!(
         raw_path.exists() || raw_candidate_1.exists(),
         "raw file missing at either {:?} or {:?}",
@@ -202,7 +219,52 @@ fn add_postagent_happy_path_envelope() {
 
     // session.md Sources block mentions the URL
     let md = fs::read_to_string(env.session_dir("t1").join("session.md")).unwrap();
-    assert!(md.contains("https://news.ycombinator.com/item?id=123"), "md: {md}");
+    assert!(
+        md.contains("https://github.com/tokio-rs/tokio/issues/8056"),
+        "md: {md}"
+    );
+}
+
+#[test]
+fn add_postagent_happy_emits_tool_call_events() {
+    let env = Env::new();
+    env.research(&["new", "t1", "--slug", "t1", "--json"]);
+    let pa = env.write_fake_bin("postagent", &fake_postagent_happy());
+
+    let (_, code, stderr) = env.research_with_bins(
+        &[
+            "add",
+            "https://github.com/tokio-rs/tokio/issues/8056",
+            "--slug",
+            "t1",
+            "--json",
+        ],
+        Some(pa.to_str().unwrap()),
+        None,
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let events = env.jsonl_events("t1");
+    let started = events
+        .iter()
+        .find(|e| e["event"] == "tool_call_started")
+        .expect("tool_call_started missing");
+    let completed = events
+        .iter()
+        .find(|e| e["event"] == "tool_call_completed")
+        .expect("tool_call_completed missing");
+    assert_eq!(started["hand"], "postagent");
+    assert_eq!(started["tool"], "postagent send");
+    assert_eq!(completed["status"], "ok");
+    assert_eq!(started["call_id"], completed["call_id"]);
+    assert!(
+        completed["artifact_refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.as_str().unwrap().starts_with("raw/")),
+        "completed event should reference raw artifact: {completed}"
+    );
 }
 
 #[test]
@@ -231,7 +293,9 @@ fn add_api_error_rejects_with_observability_envelope() {
     assert!(d["warnings"].is_array());
     // rejected raw file exists
     let rejected = d["rejected_raw_path"].as_str().unwrap();
-    let full = env.session_dir("t1").join(rejected.trim_start_matches("raw/"));
+    let full = env
+        .session_dir("t1")
+        .join(rejected.trim_start_matches("raw/"));
     assert!(
         env.session_dir("t1").join(rejected).exists() || full.exists(),
         "rejected raw file missing: {rejected}"
@@ -247,7 +311,7 @@ fn add_subprocess_fetch_failed() {
     let (v, code, _) = env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=99",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -261,14 +325,80 @@ fn add_subprocess_fetch_failed() {
 }
 
 #[test]
+fn add_subprocess_fetch_failed_emits_tool_call_error() {
+    let env = Env::new();
+    env.research(&["new", "t1", "--slug", "t1", "--json"]);
+    let pa = env.write_fake_bin("postagent", &fake_postagent_exit_1());
+
+    let (_, code, _) = env.research_with_bins(
+        &[
+            "add",
+            "https://github.com/tokio-rs/tokio/issues/8056",
+            "--slug",
+            "t1",
+            "--json",
+        ],
+        Some(pa.to_str().unwrap()),
+        None,
+    );
+    assert_ne!(code, 0);
+
+    let events = env.jsonl_events("t1");
+    let completed = events
+        .iter()
+        .find(|e| e["event"] == "tool_call_completed")
+        .expect("tool_call_completed missing");
+    assert_eq!(completed["status"], "error");
+    assert!(!completed["error_code"].as_str().unwrap_or("").is_empty());
+    assert!(
+        events.iter().any(|e| e["event"] == "source_rejected"),
+        "source_rejected should still be preserved"
+    );
+}
+
+#[test]
+fn batch_postagent_happy_emits_tool_call_events() {
+    let env = Env::new();
+    env.research(&["new", "t1", "--slug", "t1", "--json"]);
+    let pa = env.write_fake_bin("postagent", &fake_postagent_happy());
+
+    let (_, code, stderr) = env.research_with_bins(
+        &[
+            "batch",
+            "https://github.com/tokio-rs/tokio/issues/8056",
+            "https://github.com/rust-lang/rust/issues/12345",
+            "--slug",
+            "t1",
+            "--json",
+        ],
+        Some(pa.to_str().unwrap()),
+        None,
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let events = env.jsonl_events("t1");
+    let started: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["event"] == "tool_call_started")
+        .collect();
+    let completed: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["event"] == "tool_call_completed")
+        .collect();
+    assert_eq!(started.len(), 2, "started events: {started:?}");
+    assert_eq!(completed.len(), 2, "completed events: {completed:?}");
+    assert!(
+        completed.iter().all(|e| e["status"] == "ok"),
+        "all batch fetches should complete with hand ok: {completed:?}"
+    );
+}
+
+#[test]
 fn add_browser_wrong_url_rejects() {
     let env = Env::new();
     env.research(&["new", "t1", "--slug", "t1", "--json"]);
     // Fake actionbook that claims the tab is at about:blank
-    let ab = env.write_fake_bin(
-        "actionbook",
-        &fake_actionbook_happy("about:blank", 0),
-    );
+    let ab = env.write_fake_bin("actionbook", &fake_actionbook_happy("about:blank", 0));
 
     let (v, code, _) = env.research_with_bins(
         &[
@@ -316,7 +446,7 @@ fn add_duplicate_url_rejects() {
     let (_, code1, _) = env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=1",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -330,7 +460,7 @@ fn add_duplicate_url_rejects() {
     let (v, code2, _) = env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=1",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -350,7 +480,7 @@ fn add_missing_dependency_when_binary_not_found() {
     let (v, code, _) = env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=1",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -364,7 +494,10 @@ fn add_missing_dependency_when_binary_not_found() {
     let has_missing = warnings
         .iter()
         .any(|w| w.as_str().unwrap_or("").contains("MISSING_DEPENDENCY"));
-    assert!(has_missing, "expected MISSING_DEPENDENCY warning; got {warnings:?}");
+    assert!(
+        has_missing,
+        "expected MISSING_DEPENDENCY warning; got {warnings:?}"
+    );
 }
 
 #[test]
@@ -425,8 +558,7 @@ fn percent_encoded_url_with_suspicious_chars_routes_cleanly() {
     );
 
     // %22 = " , %20 = space , %3B = ;
-    let encoded =
-        "https://example.test/x?arg=1%22%3B%20touch%20/tmp/pwned_encoded%3B%20echo%20%22";
+    let encoded = "https://example.test/x?arg=1%22%3B%20touch%20/tmp/pwned_encoded%3B%20echo%20%22";
     let (v, code, _) = env.research_with_bins(
         &["add", encoded, "--slug", "t1", "--json"],
         None,
@@ -453,7 +585,7 @@ fn sources_command_lists_accepted_and_rejected() {
     env.research_with_bins(
         &[
             "add",
-            "https://news.ycombinator.com/item?id=1",
+            "https://github.com/tokio-rs/tokio/issues/8056",
             "--slug",
             "t1",
             "--json",
@@ -462,13 +594,7 @@ fn sources_command_lists_accepted_and_rejected() {
         None,
     );
     env.research_with_bins(
-        &[
-            "add",
-            "https://github.com/a/b",
-            "--slug",
-            "t1",
-            "--json",
-        ],
+        &["add", "https://github.com/a/b", "--slug", "t1", "--json"],
         Some(pa_bad.to_str().unwrap()),
         None,
     );
@@ -479,6 +605,6 @@ fn sources_command_lists_accepted_and_rejected() {
     let rejected = v["data"]["rejected"].as_array().unwrap();
     assert_eq!(accepted.len(), 1);
     assert_eq!(rejected.len(), 1);
-    assert_eq!(accepted[0]["kind"], "hn-item");
+    assert_eq!(accepted[0]["kind"], "github-issue");
     assert_eq!(rejected[0]["reason"], "api_error");
 }

@@ -35,9 +35,7 @@ pub fn run(slug: &str, force: bool) -> Envelope {
             .with_details(json!({ "accepted_sources": accepted_count }));
         }
         // TTY: simple y/n prompt
-        eprintln!(
-            "Session '{slug}' has {accepted_count} accepted sources. Delete? [y/N] "
-        );
+        eprintln!("Session '{slug}' has {accepted_count} accepted sources. Delete? [y/N] ");
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line).is_err()
             || !matches!(line.trim(), "y" | "Y" | "yes" | "YES")

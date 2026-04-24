@@ -44,22 +44,22 @@ depends: []
   骨架 + 全局 flag(`--json` / `--verbose` / `--no-color`)。
 - `research help` == `research --help` 的别名,退出码 0,输出等价;实装可直接 delegate 给
   clap 的自动生成 help,无自定义渲染。
-- **Active session 概念**:`~/.actionbook/research/.active` 是一个文件,内容为当前
+- **Active session 概念**:`~/.actionbook/ascent-research/.active` 是一个文件,内容为当前
   active session 的 slug。`research new` 写入,`research close`/`rm` 清空。大多数
   子命令 `<slug>` 可省略时即读 `.active`。
 - **Advisory flock 锁文件清单**(所有并发 / 读-改-写 场景必须用 `flock(2) LOCK_EX`):
   | 锁定目标 | 锁文件路径 | 何时加锁 |
   |---|---|---|
-  | `.active` 的读-改-写 | `~/.actionbook/research/.active.lock` | `research new`/`resume`/`close`/`rm` 改 active 时 |
-  | session.jsonl 的 append | `~/.actionbook/research/<slug>/session.jsonl.lock` | 任何追加事件到 jsonl 前 |
-  | session.md sources block 重写 | `~/.actionbook/research/<slug>/session.md.lock` | `research add` 的 sources marker 之间重写前 |
+  | `.active` 的读-改-写 | `~/.actionbook/ascent-research/.active.lock` | `research new`/`resume`/`close`/`rm` 改 active 时 |
+  | session.jsonl 的 append | `~/.actionbook/ascent-research/<slug>/session.jsonl.lock` | 任何追加事件到 jsonl 前 |
+  | session.md sources block 重写 | `~/.actionbook/ascent-research/<slug>/session.md.lock` | `research add` 的 sources marker 之间重写前 |
   | raw/`<n>` 编号分配 | **共享** `session.jsonl.lock`(读已有 source_attempted 计数 + 写新行必须在同一 critical section) | 见上 |
   纯读(`get_active()`、`list`、`status` 的只读 fetch)**不**加锁。`.active.lock` 在
   `get_active()` 失败可恢复场景可容忍缺失。LLM 端仍然**应该**在并行场景显式传 `--slug`
   以避免混淆(doc 原则,非强制)。
 - Session 目录布局(契约,这些常量由本 task 的 `session::layout` 模块导出):
   ```
-  ~/.actionbook/research/<slug>/
+  ~/.actionbook/ascent-research/<slug>/
   ├── session.md         # 活文档,LLM-readable
   ├── session.jsonl      # 追加日志,一行一事件 JSON
   ├── session.toml       # per-session config(preset, max_sources, ...)
@@ -257,4 +257,4 @@ depends: []
 - Actionbook / postagent 子进程调用(归 `research-add-source` spec)
 - 交互式 prompt / TUI
 - session.md 的自动生成模板(归 `research-session-lifecycle` spec)
-- 跨平台的 `~/.actionbook/research/` 路径(暂定 `dirs::home_dir().join(".actionbook/research")`)
+- 跨平台的 `~/.actionbook/ascent-research/` 路径(通过 `ACTIONBOOK_RESEARCH_HOME` 可覆盖)

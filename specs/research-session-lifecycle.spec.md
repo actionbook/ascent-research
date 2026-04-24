@@ -19,7 +19,7 @@ depends: [research-cli-foundation]
 
 - `research new <topic> [--preset <name>] [--slug <custom>]`:
   - 自动生成 slug(小写主题 → 连字符),或 `--slug` 覆盖
-  - 创建 `~/.actionbook/research/<slug>/`
+  - 创建 `~/.actionbook/ascent-research/<slug>/`
   - 写入 `session.md`(模板)、`session.jsonl`(第一行 `session_created`)、`session.toml`
   - 设 `.active` 为该 slug
   - stdout 打印 session 路径 + slug
@@ -113,9 +113,9 @@ depends: [research-cli-foundation]
     包: research-api-adapter/packages/research
     过滤: session_new_creates_layout
   层级: integration
-  假设 `~/.actionbook/research/` 为空
+  假设 `~/.actionbook/ascent-research/` 为空
   当 执行 `research new "Rust async runtime 2026" --preset tech --slug rust-async`
-  那么 目录 `~/.actionbook/research/rust-async/` 存在
+  那么 目录 `~/.actionbook/ascent-research/rust-async/` 存在
   并且 session.md / session.jsonl / session.toml 全部存在
   并且 session.jsonl 第一行是合法 JSON 含 `{"event": "session_created"}`
   并且 `.active` 文件内容 = "rust-async"

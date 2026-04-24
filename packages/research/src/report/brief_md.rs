@@ -22,7 +22,7 @@
 use chrono::Utc;
 use std::path::Path;
 
-use crate::session::event::{read_events, SessionEvent};
+use crate::session::event::{SessionEvent, read_events};
 
 const OVERVIEW_CHAR_CAP: usize = 400;
 const FINDINGS_CAP: usize = 6;
@@ -93,7 +93,10 @@ pub fn build(input: BriefInput<'_>) -> BriefOutput {
         input.slug
     ));
 
-    BriefOutput { text: out, warnings }
+    BriefOutput {
+        text: out,
+        warnings,
+    }
 }
 
 /// Pull the first 2 paragraphs of `## Overview`, take each's first sentence,
@@ -190,10 +193,7 @@ fn numbered_headings(md: &str) -> Vec<NumberedHeading> {
         if title.is_empty() {
             continue;
         }
-        out.push(NumberedHeading {
-            num: digits,
-            title,
-        });
+        out.push(NumberedHeading { num: digits, title });
     }
     out
 }
@@ -208,9 +208,7 @@ fn slice_section<'a>(md: &'a str, heading: &str) -> Option<&'a str> {
     let mut offset = 0usize;
     for line in rest.split_inclusive('\n') {
         let line_trim = line.trim_start_matches(' ');
-        if (line_trim.starts_with("## ") || line_trim.starts_with("# "))
-            && offset > 0
-        {
+        if (line_trim.starts_with("## ") || line_trim.starts_with("# ")) && offset > 0 {
             return Some(&rest[..offset]);
         }
         offset += line.len();

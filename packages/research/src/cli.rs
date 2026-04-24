@@ -62,6 +62,8 @@ pub enum Commands {
     Show { slug: String },
     /// Show counts + timings for the current or given session.
     Status { slug: Option<String> },
+    /// Inspect session.jsonl as a compact audit trail for hand calls, facts, and synthesis.
+    Audit { slug: Option<String> },
     /// Set a session active again and print its session.md + recent events.
     Resume { slug: String },
     /// Route + fetch + smell-test a URL and attach to the active session.
@@ -145,8 +147,9 @@ pub enum Commands {
         #[arg(long)]
         open: bool,
         /// Also render Chinese translations next to each English paragraph
-        /// in report.html. Requires a working Claude provider (cc-sdk).
-        /// Costs tokens proportional to report length.
+        /// in report.html. Requires a working LLM provider; choose one with
+        /// ASR_BILINGUAL_PROVIDER=claude|codex. Costs tokens proportional
+        /// to report length.
         #[arg(long)]
         bilingual: bool,
     },
@@ -200,6 +203,18 @@ pub enum Commands {
     },
     /// Coverage: fact-based completeness stats + report_ready blockers.
     Coverage { slug: Option<String> },
+    /// Verify local prerequisites for the skill/playbooks without creating a session.
+    Doctor {
+        /// Also do a live one-shot LLM provider call. This can spend tokens.
+        #[arg(long = "provider-smoke")]
+        provider_smoke: bool,
+        /// Also exercise postagent/actionbook command surfaces.
+        #[arg(long = "tool-smoke")]
+        tool_smoke: bool,
+        /// Provider to smoke-test: claude | codex | all.
+        #[arg(long = "provider", default_value = "all")]
+        provider: String,
+    },
     /// Run the autonomous research loop (feature: autoresearch).
     #[cfg(feature = "autoresearch")]
     Loop {
@@ -333,19 +348,25 @@ pub fn run() -> ExitCode {
 
 fn dispatch(cmd: Commands) -> Envelope {
     match cmd {
-        Commands::New { topic, preset, slug, force, from, tag } => {
-            commands::new::run(
-                &topic,
-                preset.as_deref(),
-                slug.as_deref(),
-                force,
-                from.as_deref(),
-                &tag,
-            )
-        }
+        Commands::New {
+            topic,
+            preset,
+            slug,
+            force,
+            from,
+            tag,
+        } => commands::new::run(
+            &topic,
+            preset.as_deref(),
+            slug.as_deref(),
+            force,
+            from.as_deref(),
+            &tag,
+        ),
         Commands::List { tag, tree } => commands::list::run(tag.as_deref(), tree),
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
+        Commands::Audit { slug } => commands::audit::run(slug.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
         Commands::Add {
             url,
@@ -377,9 +398,7 @@ fn dispatch(cmd: Commands) -> Envelope {
             max_file_bytes,
             max_total_bytes,
         ),
-        Commands::Sources { slug, rejected } => {
-            commands::sources::run(slug.as_deref(), rejected)
-        }
+        Commands::Sources { slug, rejected } => commands::sources::run(slug.as_deref(), rejected),
         Commands::Batch {
             urls,
             slug,
@@ -399,27 +418,43 @@ fn dispatch(cmd: Commands) -> Envelope {
             min_bytes,
             on_short_body.as_deref(),
         ),
-        Commands::Synthesize { slug, no_render, open, bilingual } => {
-            commands::synthesize::run(slug.as_deref(), no_render, open, bilingual)
-        }
-        Commands::Report { slug, format, open, no_open, stdout, output } => {
-            commands::report::run(
-                slug.as_deref(),
-                &format,
-                open,
-                no_open,
-                stdout,
-                output.as_deref(),
-            )
-        }
+        Commands::Synthesize {
+            slug,
+            no_render,
+            open,
+            bilingual,
+        } => commands::synthesize::run(slug.as_deref(), no_render, open, bilingual),
+        Commands::Report {
+            slug,
+            format,
+            open,
+            no_open,
+            stdout,
+            output,
+        } => commands::report::run(
+            slug.as_deref(),
+            &format,
+            open,
+            no_open,
+            stdout,
+            output.as_deref(),
+        ),
         Commands::Close { slug } => commands::close::run(slug.as_deref()),
         Commands::Rm { slug, force } => commands::rm::run(&slug, force),
-        Commands::Route { url, prefer, rules, preset } => {
-            commands::route::run(&url, prefer.as_deref(), rules.as_deref(), preset.as_deref())
-        }
+        Commands::Route {
+            url,
+            prefer,
+            rules,
+            preset,
+        } => commands::route::run(&url, prefer.as_deref(), rules.as_deref(), preset.as_deref()),
         Commands::Series { tag, open } => commands::series::run(&tag, open),
         Commands::Diff { slug, unused_only } => commands::diff::run(slug.as_deref(), unused_only),
         Commands::Coverage { slug } => commands::coverage::run(slug.as_deref()),
+        Commands::Doctor {
+            provider_smoke,
+            tool_smoke,
+            provider,
+        } => commands::doctor::run(provider_smoke, tool_smoke, &provider),
         #[cfg(feature = "autoresearch")]
         Commands::Loop {
             slug,
@@ -438,21 +473,23 @@ fn dispatch(cmd: Commands) -> Envelope {
         ),
         Commands::Wiki { sub } => match sub {
             WikiCmd::List { slug } => commands::wiki::run_list(slug.as_deref()),
-            WikiCmd::Show { page, slug } => {
-                commands::wiki::run_show(&page, slug.as_deref())
-            }
+            WikiCmd::Show { page, slug } => commands::wiki::run_show(&page, slug.as_deref()),
             WikiCmd::Rm { page, slug, force } => {
                 commands::wiki::run_rm(&page, slug.as_deref(), force)
             }
-            WikiCmd::Query { question, slug, save_as, format, provider } => {
-                commands::wiki_query::run(
-                    &question,
-                    slug.as_deref(),
-                    save_as.as_deref(),
-                    format.as_deref(),
-                    &provider,
-                )
-            }
+            WikiCmd::Query {
+                question,
+                slug,
+                save_as,
+                format,
+                provider,
+            } => commands::wiki_query::run(
+                &question,
+                slug.as_deref(),
+                save_as.as_deref(),
+                format.as_deref(),
+                &provider,
+            ),
             WikiCmd::Lint { slug, stale_days } => {
                 commands::wiki_lint::run(slug.as_deref(), stale_days)
             }

@@ -23,7 +23,11 @@ impl Env {
         let home = tmp.path().to_string_lossy().into_owned();
         let bin_dir = tmp.path().join("_bin");
         fs::create_dir_all(&bin_dir).unwrap();
-        Self { _tmp: tmp, home, bin_dir }
+        Self {
+            _tmp: tmp,
+            home,
+            bin_dir,
+        }
     }
 
     fn research(&self, args: &[&str]) -> (Value, i32, String) {
@@ -32,7 +36,10 @@ impl Env {
         cmd.env("ACTIONBOOK_RESEARCH_HOME", &self.home);
         cmd.env("SYNTHESIZE_NO_OPEN", "1");
         // Default to a fake json-ui that creates stub HTML so synthesize can succeed.
-        cmd.env("JSON_UI_BIN", self.ensure_fake_json_ui().to_string_lossy().into_owned());
+        cmd.env(
+            "JSON_UI_BIN",
+            self.ensure_fake_json_ui().to_string_lossy().into_owned(),
+        );
         let out = cmd.output().expect("spawn research");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -65,7 +72,8 @@ done
 [ -n "$out" ] && echo "<html><body>stub</body></html>" > "$out"
 exit 0
 "#,
-            ).unwrap();
+            )
+            .unwrap();
             let mut perms = fs::metadata(&path).unwrap().permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&path, perms).unwrap();
@@ -75,7 +83,9 @@ exit 0
 }
 
 fn write_session_md_with_overview(path: &PathBuf) {
-    fs::write(path, "\
+    fs::write(
+        path,
+        "\
 # Research: T
 
 ## Objective
@@ -97,18 +107,36 @@ body alpha
 
 ## Notes
 notes
-").unwrap();
+",
+    )
+    .unwrap();
 }
 
 #[test]
 fn new_from_parent_inherits_context_and_tags() {
     let env = Env::new();
-    env.research(&["new", "parent topic", "--slug", "p", "--tag", "rust-series", "--json"]);
+    env.research(&[
+        "new",
+        "parent topic",
+        "--slug",
+        "p",
+        "--tag",
+        "rust-series",
+        "--json",
+    ]);
     // Parent session.md is the template — swap in a meaningful Overview.
     write_session_md_with_overview(&env.root().join("p/session.md"));
 
     let (v, code, stderr) = env.research(&[
-        "new", "child topic", "--slug", "c", "--from", "p", "--tag", "extra", "--json",
+        "new",
+        "child topic",
+        "--slug",
+        "c",
+        "--from",
+        "p",
+        "--tag",
+        "extra",
+        "--json",
     ]);
     assert_eq!(code, 0, "stderr: {stderr}; v={v}");
     assert_eq!(v["data"]["parent_slug"], "p");
@@ -120,7 +148,10 @@ fn new_from_parent_inherits_context_and_tags() {
 
     // Child session.md contains `## Context (from p)` block with parent overview.
     let child_md = fs::read_to_string(env.root().join("c/session.md")).unwrap();
-    assert!(child_md.contains("## Context (from p)"), "child md: {child_md}");
+    assert!(
+        child_md.contains("## Context (from p)"),
+        "child md: {child_md}"
+    );
     assert!(child_md.contains("meaningful overview paragraph"));
 
     // session.toml has parent_slug and tags.
@@ -133,7 +164,13 @@ fn new_from_parent_inherits_context_and_tags() {
 fn new_from_missing_parent_errors() {
     let env = Env::new();
     let (v, code, _) = env.research(&[
-        "new", "x", "--slug", "x", "--from", "no-such-parent", "--json",
+        "new",
+        "x",
+        "--slug",
+        "x",
+        "--from",
+        "no-such-parent",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "PARENT_NOT_FOUND");
@@ -145,7 +182,9 @@ fn new_from_missing_parent_errors() {
 fn list_filters_by_tag() {
     let env = Env::new();
     env.research(&["new", "a", "--slug", "a", "--tag", "x", "--json"]);
-    env.research(&["new", "b", "--slug", "b", "--tag", "x", "--tag", "y", "--json"]);
+    env.research(&[
+        "new", "b", "--slug", "b", "--tag", "x", "--tag", "y", "--json",
+    ]);
     env.research(&["new", "c", "--slug", "c", "--tag", "y", "--json"]);
 
     let (v, code, _) = env.research(&["list", "--tag", "x", "--json"]);
@@ -173,10 +212,7 @@ fn list_tree_shows_parent_child() {
     let (v, code, _) = env.research(&["list", "--tree", "--json"]);
     assert_eq!(code, 0);
     let tree = v["data"]["tree"].as_array().unwrap();
-    let roots: Vec<&str> = tree
-        .iter()
-        .map(|n| n["slug"].as_str().unwrap())
-        .collect();
+    let roots: Vec<&str> = tree.iter().map(|n| n["slug"].as_str().unwrap()).collect();
     assert!(roots.contains(&"p"));
     assert!(roots.contains(&"orph"));
     let p_node = tree.iter().find(|n| n["slug"] == "p").unwrap();
@@ -224,7 +260,10 @@ fn series_generates_index_with_multiple_members() {
     assert_eq!(items.len(), 3);
     let badges: Vec<&str> = items.iter().map(|i| i["badge"].as_str().unwrap()).collect();
     for slug in ["s1", "s2", "s3"] {
-        assert!(badges.contains(&slug), "missing {slug} in badges: {badges:?}");
+        assert!(
+            badges.contains(&slug),
+            "missing {slug} in badges: {badges:?}"
+        );
     }
 }
 
@@ -235,7 +274,9 @@ fn series_warns_on_unsynthesized_member() {
     write_session_md_with_overview(&env.root().join("done/session.md"));
     env.research(&["synthesize", "done", "--json"]);
     // second session: tagged but not synthesized
-    env.research(&["new", "pending", "--slug", "pending", "--tag", "s", "--json"]);
+    env.research(&[
+        "new", "pending", "--slug", "pending", "--tag", "s", "--json",
+    ]);
 
     let (v, code, _) = env.research(&["series", "s", "--json"]);
     assert_eq!(code, 0);
@@ -245,7 +286,10 @@ fn series_warns_on_unsynthesized_member() {
         .map(|w| w.as_str().unwrap_or(""))
         .collect::<Vec<_>>()
         .join("|");
-    assert!(joined.contains("pending"), "no warning for pending: {joined}");
+    assert!(
+        joined.contains("pending"),
+        "no warning for pending: {joined}"
+    );
 }
 
 #[test]

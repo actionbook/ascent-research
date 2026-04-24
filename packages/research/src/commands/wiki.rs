@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::output::Envelope;
 use crate::session::{
     active, config,
-    event::{read_events, SessionEvent},
+    event::{SessionEvent, read_events},
     layout, wiki,
 };
 
@@ -38,10 +38,12 @@ pub fn run_list(slug_arg: Option<&str>) -> Envelope {
             let (fm, _rest) = wiki::split_frontmatter(&body);
             let write_events = events
                 .iter()
-                .filter(|e| matches!(
-                    e,
-                    SessionEvent::WikiPageWritten { slug: s, .. } if s == page_slug
-                ))
+                .filter(|e| {
+                    matches!(
+                        e,
+                        SessionEvent::WikiPageWritten { slug: s, .. } if s == page_slug
+                    )
+                })
                 .count();
             json!({
                 "slug": page_slug,
@@ -153,6 +155,7 @@ pub fn run_rm(page_slug: &str, slug_arg: Option<&str>, force: bool) -> Envelope 
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn resolve_slug(slug_arg: Option<&str>, cmd: &'static str) -> Result<String, Envelope> {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -168,8 +171,10 @@ fn resolve_slug(slug_arg: Option<&str>, cmd: &'static str) -> Result<String, Env
         },
     };
     if !config::exists(&slug) {
-        return Err(Envelope::fail(cmd, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
-            .with_context(json!({ "session": slug })));
+        return Err(
+            Envelope::fail(cmd, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
+                .with_context(json!({ "session": slug })),
+        );
     }
     Ok(slug)
 }

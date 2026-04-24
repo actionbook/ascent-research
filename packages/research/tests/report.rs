@@ -75,45 +75,81 @@ fn accepted_event(ts: &str, url: &str, kind: &str, bytes: u64) -> String {
     )
 }
 
+fn long_overview() -> String {
+    "This overview is long enough to satisfy the coverage gate while staying readable. ".repeat(6)
+}
+
+fn write_diagram(env: &Env, slug: &str, name: &str, svg: &str) {
+    let diag_dir = env.session_dir(slug).join("diagrams");
+    fs::create_dir_all(&diag_dir).unwrap();
+    fs::write(diag_dir.join(name), svg).unwrap();
+}
+
+fn prep_ready_rich_session(env: &Env, slug: &str, body: &str, sources: &[(&str, &str)]) {
+    env.prep_session(slug, body);
+    let lines: Vec<String> = sources
+        .iter()
+        .enumerate()
+        .map(|(idx, (url, kind))| {
+            accepted_event(
+                &format!("2026-04-19T10:{:02}:00Z", idx + 1),
+                url,
+                kind,
+                (idx + 1) as u64,
+            )
+        })
+        .collect();
+    let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    env.append_jsonl(slug, &line_refs);
+}
+
 // ── Spec acceptance #1: happy-path rich-html ───────────────────────────────
 
 #[test]
 fn happy_path_rich_html() {
     let env = Env::new();
-    // Diagram file
-    let body = r#"## Overview
-Browser-harness flips the usual framework stance.
+    let overview = long_overview();
+    let body = format!(
+        r#"## Overview
+{overview}
 
 > **aside:** The less you build, the more it works.
 
 ## 01 · WHY
-Frameworks grow friction.
+Frameworks grow friction. See [source A](https://example.com/a).
 
 ## 02 · WHAT
-Four Python files totaling ~592 lines.
+Four Python files totaling ~592 lines. See [source B](https://example.com/b).
+
+## 03 · HOW
+Render the diagram and keep the report grounded.
 
 ![Fig · demo](diagrams/foo.svg)
-"#;
-    env.prep_session("s1", body);
-    // Accepted sources
-    env.append_jsonl(
+"#
+    );
+    prep_ready_rich_session(
+        &env,
         "s1",
+        &body,
         &[
-            &accepted_event("2026-04-19T10:01:00Z", "https://example.com/a", "github-file", 100),
-            &accepted_event("2026-04-19T10:02:00Z", "https://example.com/b", "github-tree", 200),
+            ("https://example.com/a", "github-file"),
+            ("https://example.com/b", "github-tree"),
         ],
     );
-    // Diagram
-    let diag_dir = env.session_dir("s1").join("diagrams");
-    fs::create_dir_all(&diag_dir).unwrap();
-    fs::write(
-        diag_dir.join("foo.svg"),
+    write_diagram(
+        &env,
+        "s1",
+        "foo.svg",
         "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"5\"/></svg>",
-    )
-    .unwrap();
+    );
 
     let (v, code, stderr, _) = env.research(&[
-        "report", "s1", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s1",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(v["data"]["format"], "rich-html");
@@ -145,7 +181,12 @@ fn missing_overview_is_fatal() {
         "## Overview\n<!-- placeholder only -->\n\n## Findings\nx\n",
     );
     let (v, code, _, _) = env.research(&[
-        "report", "s2", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s2",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "MISSING_OVERVIEW");
@@ -156,12 +197,28 @@ fn missing_overview_is_fatal() {
 #[test]
 fn multiple_asides_warn_and_keep_first() {
     let env = Env::new();
-    env.prep_session(
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
         "s3",
-        "## Overview\nbody\n\n> **aside:** first one\n\ntext\n\n> **aside:** second one\n",
+        &format!(
+            "## Overview\n{overview}\n\n> **aside:** first one\n\ntext\n\n## 01 · A\ncite [source](https://aside.test/).\n\n## 02 · B\nbody.\n\n## 03 · C\ndiagram below.\n\n![fig](diagrams/aside.svg)\n"
+        ),
+        &[("https://aside.test/", "github-file")],
+    );
+    write_diagram(
+        &env,
+        "s3",
+        "aside.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"10\" height=\"10\"/></svg>",
     );
     let (v, code, _, _) = env.research(&[
-        "report", "s3", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s3",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0);
 
@@ -172,7 +229,11 @@ fn multiple_asides_warn_and_keep_first() {
         "exactly one aside renders"
     );
     let warnings = v["data"]["warnings"].as_array().unwrap();
-    assert!(warnings.iter().any(|w| w.as_str() == Some("aside_multiple")));
+    assert!(
+        !warnings
+            .iter()
+            .any(|w| w.as_str() == Some("aside_multiple"))
+    );
 }
 
 // ── Spec acceptance #4: DIAGRAM_OUT_OF_BOUNDS ─────────────────────────────
@@ -180,12 +241,22 @@ fn multiple_asides_warn_and_keep_first() {
 #[test]
 fn diagram_out_of_bounds_rejected() {
     let env = Env::new();
-    env.prep_session(
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
         "s4",
-        "## Overview\nfoo\n\n![bad](diagrams/../../etc/passwd.svg)\n",
+        &format!(
+            "## Overview\n{overview}\n\n## 01 · A\ncite [source](https://oob.test/).\n\n## 02 · B\nbody.\n\n## 03 · C\n![bad](diagrams/../../etc/passwd.svg)\n"
+        ),
+        &[("https://oob.test/", "github-file")],
     );
     let (v, code, _, _) = env.research(&[
-        "report", "s4", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s4",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "DIAGRAM_OUT_OF_BOUNDS");
@@ -194,35 +265,36 @@ fn diagram_out_of_bounds_rejected() {
 // ── Spec acceptance #5: diagram missing → <img> fallback + warning ─────────
 
 #[test]
-fn diagram_missing_renders_placeholder() {
-    // v0.2: instead of a broken `<img>`, the renderer now emits a
-    // styled `.diagram.diagram-missing` placeholder so the reader
-    // sees an obvious "diagram pending" card rather than a broken-
-    // image icon. The `diagram_fallback_img` warning is still
-    // emitted so coverage / callers can surface the gap.
+fn diagram_missing_blocks_rich_html_report_until_ready() {
     let env = Env::new();
-    env.prep_session(
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
         "s5",
-        "## Overview\nbody\n\n![gone](diagrams/missing.svg)\n",
+        &format!(
+            "## Overview\n{overview}\n\n## 01 · A\ncite [source](https://missing.test/).\n\n## 02 · B\nbody.\n\n## 03 · C\n![gone](diagrams/missing.svg)\n"
+        ),
+        &[("https://missing.test/", "github-file")],
     );
-    fs::create_dir_all(env.session_dir("s5").join("diagrams")).unwrap();
     let (v, code, _, _) = env.research(&[
-        "report", "s5", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s5",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
-    assert_eq!(code, 0);
-
-    let report = fs::read_to_string(env.session_dir("s5").join("report-rich.html")).unwrap();
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "REPORT_NOT_READY");
+    let blockers = v["error"]["details"]["report_ready_blockers"]
+        .as_array()
+        .unwrap();
     assert!(
-        !report.contains("<img src=\"diagrams/missing.svg\""),
-        "must NOT leave a bare broken-image <img> tag"
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("diagrams_resolved"))
     );
-    assert!(
-        report.contains(r#"class="diagram diagram-missing""#),
-        "expected placeholder block"
-    );
-    assert!(report.contains("diagram pending"));
-    let warnings = v["data"]["warnings"].as_array().unwrap();
-    assert!(warnings.iter().any(|w| w.as_str() == Some("diagram_fallback_img")));
+    assert!(!env.session_dir("s5").join("report-rich.html").exists());
 }
 
 // ── Spec acceptance #6: `## 01 · WHY` heading → badge span ────────────────
@@ -230,12 +302,28 @@ fn diagram_missing_renders_placeholder() {
 #[test]
 fn section_numbers_render_as_badge() {
     let env = Env::new();
-    env.prep_session(
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
         "s6",
-        "## Overview\nhello\n\n## 01 · WHY\nintro\n\n## 02 · WHAT\nbody\n",
+        &format!(
+            "## Overview\n{overview}\n\n## 01 · WHY\nintro with [source](https://badge.test/).\n\n## 02 · WHAT\nbody.\n\n## 03 · HOW\nmore body.\n\n![fig](diagrams/badge.svg)\n"
+        ),
+        &[("https://badge.test/", "github-file")],
+    );
+    write_diagram(
+        &env,
+        "s6",
+        "badge.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0\"/></svg>",
     );
     let (_, code, _, _) = env.research(&[
-        "report", "s6", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s6",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0);
 
@@ -251,20 +339,33 @@ fn section_numbers_render_as_badge() {
 #[test]
 fn sources_from_jsonl_not_md() {
     let env = Env::new();
-    env.prep_session("s7", "## Overview\nx\n");
-
-    // Three accepted events in jsonl
-    env.append_jsonl(
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
         "s7",
+        &format!(
+            "## Overview\n{overview}\n\n## 01 · A\n[a](https://a.test/)\n\n## 02 · B\n[b](https://b.test/)\n\n## 03 · C\n[c](https://c.test/)\n\n![fig](diagrams/sources.svg)\n"
+        ),
         &[
-            &accepted_event("2026-04-19T10:01:00Z", "https://a.test/", "kindA", 1),
-            &accepted_event("2026-04-19T10:02:00Z", "https://b.test/", "kindB", 2),
-            &accepted_event("2026-04-19T10:03:00Z", "https://c.test/", "kindC", 3),
+            ("https://a.test/", "kindA"),
+            ("https://b.test/", "kindB"),
+            ("https://c.test/", "kindC"),
         ],
+    );
+    write_diagram(
+        &env,
+        "s7",
+        "sources.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><text x=\"1\" y=\"1\">x</text></svg>",
     );
 
     let (v, code, _, _) = env.research(&[
-        "report", "s7", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s7",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0);
     assert_eq!(v["data"]["sources_count"], 3);
@@ -282,14 +383,17 @@ fn future_format_returns_not_implemented() {
     let env = Env::new();
     env.prep_session("s8", "## Overview\nx\n");
     let (v, code, _, _) = env.research(&[
-        "report", "s8", "--format", "slides-reveal", "--no-open", "--json",
+        "report",
+        "s8",
+        "--format",
+        "slides-reveal",
+        "--no-open",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "FORMAT_NOT_IMPLEMENTED");
     let supported = v["error"]["details"]["supported"].as_array().unwrap();
-    assert!(supported
-        .iter()
-        .any(|s| s.as_str() == Some("rich-html")));
+    assert!(supported.iter().any(|s| s.as_str() == Some("rich-html")));
 }
 
 #[test]
@@ -297,7 +401,12 @@ fn unknown_format_returns_unsupported() {
     let env = Env::new();
     env.prep_session("s-unknown", "## Overview\nx\n");
     let (v, code, _, _) = env.research(&[
-        "report", "s-unknown", "--format", "gibberish", "--no-open", "--json",
+        "report",
+        "s-unknown",
+        "--format",
+        "gibberish",
+        "--no-open",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "FORMAT_UNSUPPORTED");
@@ -308,11 +417,30 @@ fn unknown_format_returns_unsupported() {
 #[test]
 fn idempotent_rerun_overwrites() {
     let env = Env::new();
-    env.prep_session("s9", "## Overview\nhello\n");
+    let overview = long_overview();
+    prep_ready_rich_session(
+        &env,
+        "s9",
+        &format!(
+            "## Overview\n{overview}\n\n## 01 · A\ncite [source](https://rerun.test/).\n\n## 02 · B\nbody.\n\n## 03 · C\nbody.\n\n![fig](diagrams/rerun.svg)\n"
+        ),
+        &[("https://rerun.test/", "github-file")],
+    );
+    write_diagram(
+        &env,
+        "s9",
+        "rerun.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"5\"/></svg>",
+    );
     let path = env.session_dir("s9").join("report-rich.html");
 
     let (v1, code1, _, _) = env.research(&[
-        "report", "s9", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s9",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code1, 0);
     let bytes1 = v1["data"]["bytes"].as_u64().unwrap();
@@ -321,16 +449,55 @@ fn idempotent_rerun_overwrites() {
     // Change the Overview; re-run; bytes should differ deterministically.
     fs::write(
         env.session_dir("s9").join("session.md"),
-        "## Overview\nsomething much longer than before to change the byte count\n",
+        format!(
+            "## Overview\n{}{}\n\n## 01 · A\ncite [source](https://rerun.test/).\n\n## 02 · B\nbody.\n\n## 03 · C\nbody changed.\n\n![fig](diagrams/rerun.svg)\n",
+            long_overview(),
+            "Additional material to change the byte count. "
+        ),
     )
     .unwrap();
     let (v2, code2, _, _) = env.research(&[
-        "report", "s9", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "s9",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code2, 0);
     let bytes2 = v2["data"]["bytes"].as_u64().unwrap();
-    assert!(bytes2 != bytes1, "rerun should change output size after md change");
+    assert!(
+        bytes2 != bytes1,
+        "rerun should change output size after md change"
+    );
     assert!(path.exists(), "file still exists after rerun");
+}
+
+#[test]
+fn rich_html_rejects_not_ready_session() {
+    let env = Env::new();
+    env.prep_session(
+        "s10",
+        "## Overview\nThis overview is not enough to make the session complete.\n\n## 01 · A\nbody only.\n",
+    );
+    let (v, code, _, _) = env.research(&[
+        "report",
+        "s10",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
+    ]);
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "REPORT_NOT_READY");
+    let blockers = v["error"]["details"]["report_ready_blockers"]
+        .as_array()
+        .unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("sources_accepted"))
+    );
 }
 
 // ── Extra: SESSION_NOT_FOUND path ─────────────────────────────────────────
@@ -339,7 +506,12 @@ fn idempotent_rerun_overwrites() {
 fn session_not_found_returns_code() {
     let env = Env::new();
     let (v, code, _, _) = env.research(&[
-        "report", "nope", "--format", "rich-html", "--no-open", "--json",
+        "report",
+        "nope",
+        "--format",
+        "rich-html",
+        "--no-open",
+        "--json",
     ]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "SESSION_NOT_FOUND");
@@ -357,12 +529,27 @@ fn brief_md_happy_path_writes_file_under_2kb() {
     env.append_jsonl(
         "bm1",
         &[
-            &accepted_event("2026-04-20T10:01:00Z", "https://a.test/", "github-file", 100),
-            &accepted_event("2026-04-20T10:02:00Z", "https://b.test/", "github-tree", 200),
+            &accepted_event(
+                "2026-04-20T10:01:00Z",
+                "https://a.test/",
+                "github-file",
+                100,
+            ),
+            &accepted_event(
+                "2026-04-20T10:02:00Z",
+                "https://b.test/",
+                "github-tree",
+                200,
+            ),
         ],
     );
     let (v, code, stderr, _) = env.research(&[
-        "report", "bm1", "--format", "brief-md", "--no-open", "--json",
+        "report",
+        "bm1",
+        "--format",
+        "brief-md",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0, "stderr: {stderr}");
     assert_eq!(v["data"]["format"], "brief-md");
@@ -382,7 +569,12 @@ fn brief_md_writes_default_path_when_no_output_flag() {
     let env = Env::new();
     env.prep_session("bm2", "## Overview\nsomething.\n");
     let (v, code, _, _) = env.research(&[
-        "report", "bm2", "--format", "brief-md", "--no-open", "--json",
+        "report",
+        "bm2",
+        "--format",
+        "brief-md",
+        "--no-open",
+        "--json",
     ]);
     assert_eq!(code, 0);
     let expected = env.session_dir("bm2").join("report-brief.md");
@@ -397,9 +589,7 @@ fn brief_md_writes_default_path_when_no_output_flag() {
 fn brief_md_stdout_mode_does_not_write_file() {
     let env = Env::new();
     env.prep_session("bm3", "## Overview\nstdout content.\n");
-    let (_, code, _, stdout) = env.research(&[
-        "report", "bm3", "--format", "brief-md", "--stdout",
-    ]);
+    let (_, code, _, stdout) = env.research(&["report", "bm3", "--format", "brief-md", "--stdout"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("# topic"));
     assert!(stdout.contains("stdout content."));
@@ -429,7 +619,10 @@ fn brief_md_output_flag_writes_to_specified_path() {
     );
     assert!(custom.exists());
     let default = env.session_dir("bm4").join("report-brief.md");
-    assert!(!default.exists(), "default path should not be written when --output is set");
+    assert!(
+        !default.exists(),
+        "default path should not be written when --output is set"
+    );
 }
 
 #[test]
@@ -438,12 +631,14 @@ fn brief_md_truncates_overview_over_400_chars() {
     let long = "x".repeat(600);
     let md = format!("## Overview\n{long}.\n");
     env.prep_session("bm5", &md);
-    let (v, code, _, _) = env.research(&[
-        "report", "bm5", "--format", "brief-md", "--json",
-    ]);
+    let (v, code, _, _) = env.research(&["report", "bm5", "--format", "brief-md", "--json"]);
     assert_eq!(code, 0);
     let warnings = v["data"]["warnings"].as_array().unwrap();
-    assert!(warnings.iter().any(|w| w.as_str() == Some("overview_truncated")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str() == Some("overview_truncated"))
+    );
 }
 
 #[test]
@@ -454,12 +649,14 @@ fn brief_md_truncates_findings_over_six() {
         md.push_str(&format!("## {i:02} · S{i}\nbody {i}.\n\n"));
     }
     env.prep_session("bm6", &md);
-    let (v, code, _, _) = env.research(&[
-        "report", "bm6", "--format", "brief-md", "--json",
-    ]);
+    let (v, code, _, _) = env.research(&["report", "bm6", "--format", "brief-md", "--json"]);
     assert_eq!(code, 0);
     let warnings = v["data"]["warnings"].as_array().unwrap();
-    assert!(warnings.iter().any(|w| w.as_str() == Some("findings_truncated")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str() == Some("findings_truncated"))
+    );
 }
 
 #[test]
@@ -469,9 +666,7 @@ fn brief_md_missing_overview_still_fatal() {
         "bm7",
         "## Overview\n<!-- placeholder -->\n\n## 01 · X\nbody.\n",
     );
-    let (v, code, _, _) = env.research(&[
-        "report", "bm7", "--format", "brief-md", "--json",
-    ]);
+    let (v, code, _, _) = env.research(&["report", "bm7", "--format", "brief-md", "--json"]);
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "MISSING_OVERVIEW");
 }
@@ -483,9 +678,7 @@ fn brief_md_ignores_diagram_references() {
         "bm8",
         "## Overview\nReal.\n\n![Fig](diagrams/foo.svg)\n\n## 01 · WHY\nwhy body sentence.\n",
     );
-    let (v, code, _, _) = env.research(&[
-        "report", "bm8", "--format", "brief-md", "--json",
-    ]);
+    let (v, code, _, _) = env.research(&["report", "bm8", "--format", "brief-md", "--json"]);
     assert_eq!(code, 0);
     let text = fs::read_to_string(v["data"]["output_path"].as_str().unwrap()).unwrap();
     assert!(!text.contains("![Fig]"));
@@ -498,13 +691,14 @@ fn brief_md_sources_from_jsonl_not_md() {
     env.prep_session("bm9", "## Overview\nsomething real.\n\n## 01 · WHY\nwhy.\n");
     env.append_jsonl(
         "bm9",
-        &[
-            &accepted_event("2026-04-20T10:00:00Z", "https://jsonl-only.test/", "k1", 1),
-        ],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://jsonl-only.test/",
+            "k1",
+            1,
+        )],
     );
-    let (v, code, _, _) = env.research(&[
-        "report", "bm9", "--format", "brief-md", "--json",
-    ]);
+    let (v, code, _, _) = env.research(&["report", "bm9", "--format", "brief-md", "--json"]);
     assert_eq!(code, 0);
     let text = fs::read_to_string(v["data"]["output_path"].as_str().unwrap()).unwrap();
     assert!(text.contains("jsonl-only.test"));

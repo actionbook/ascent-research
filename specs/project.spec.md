@@ -32,7 +32,7 @@ infra 层长出 Rust binary。
 - **`research` CLI 位置**:`research-api-adapter/packages/research/`(Cargo crate,独立 binary)
 - **`research` CLI 架构**:独立进程,内部以子进程调 `actionbook`(browser)和 `postagent`(API)。
   不吸收它们的源码,保持各 repo 的自治。
-- **Session 持久化**(借鉴 pi-autoresearch):每个 session 用目录 `~/.actionbook/research/<slug>/`,
+- **Session 持久化**(借鉴 pi-autoresearch):每个 session 用目录 `~/.actionbook/ascent-research/<slug>/`,
   含两个核心状态文件 `session.md`(LLM-readable 活文档)+ `session.jsonl`(machine-readable
   追加日志)。两文件保证 fresh agent 能无状态恢复。
 - **Infra-enforced smell test**:所有 `research add <url>` 在 CLI 内部强制执行 smell test。
@@ -113,7 +113,7 @@ infra 层长出 Rust binary。
     过滤: 人工审计 report.json
   层级: human-review
   命中: `research synthesize` 产出的报告
-  假设 一次 `research synthesize` 已经生成 `~/.actionbook/research/<slug>/report.json`
+  假设 一次 `research synthesize` 已经生成 `~/.actionbook/ascent-research/<slug>/report.json`
   当 审查该 JSON 报告
   那么 至少包含 2 种 distinct source type(API + 浏览器 至少各 1 个),
     或在 Methodology 段显式声明单源类型豁免理由

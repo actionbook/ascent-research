@@ -34,7 +34,7 @@ Historical content preserved below for context.
 5. **没有 benchmark 基线**：Tier 2 #16 的 before/after benchmark 没有物理落脚点
 
 本任务定义一个约定（目录布局 + 文件命名），让后续研究产物自动落到
-`~/.actionbook/research/<topic-slug>/`，避免 `/tmp` 的易失性。
+`~/.actionbook/ascent-research/<topic-slug>/`，避免 `/tmp` 的易失性。
 
 **不实现目录生成/缓存逻辑的独立 CLI 命令**——约定先行，让 SKILL.md 里的 bash
 snippet 直接往这个路径写；未来如果真需要 `actionbook research session` 子命令再
@@ -42,11 +42,11 @@ snippet 直接往这个路径写；未来如果真需要 `actionbook research se
 
 ## 已定决策
 
-- 根目录：`~/.actionbook/research/`（和现有 `~/.actionbook/{config.toml,last_snapshot.json,...}` 同级）
+- 根目录：`~/.actionbook/ascent-research/`（和现有 `~/.actionbook/{config.toml,last_snapshot.json,...}` 同级）
 - 单次研究一个子目录：`<topic-slug>/`，slug 规则：小写 + 连字符（`Rust async runtime 在 2026 年` → `rust-async-runtime-2026`）
 - 子目录固定结构：
   ```
-  ~/.actionbook/research/<topic-slug>/
+  ~/.actionbook/ascent-research/<topic-slug>/
   ├── plan.md           # 计划 5-8 个搜索 query + 目标源分布
   ├── raw/              # 所有原始抓取(API JSON / 浏览器 --json 响应)
   │   ├── <n>-<source>.json   # n = 抓取顺序, source = hn|github|arxiv|browser-<slug>
@@ -84,7 +84,7 @@ snippet 直接往这个路径写；未来如果真需要 `actionbook research se
   假设 skill 里至少存在一段写文件的 recipe(postagent send > file, browser text --json > file)
   当 grep skill 里所有 `> /tmp/` 出现
   那么 数量为 0
-  并且 grep `~/.actionbook/research/` 至少出现 1 次(用于示范目录布局)
+  并且 grep `~/.actionbook/ascent-research/` 至少出现 1 次(用于示范目录布局)
 
 场景: slug 生成规则清晰
   测试:
@@ -104,7 +104,7 @@ snippet 直接往这个路径写；未来如果真需要 `actionbook research se
     过滤: human-review
   层级: docs
   命中: 本 spec 的"已定决策"段
-  假设 `~/.actionbook/research/rust-async-runtime-2026/` 已存在
+  假设 `~/.actionbook/ascent-research/rust-async-runtime-2026/` 已存在
   当 再次研究同一主题
   那么 新产物写到 `rust-async-runtime-2026-20260418-1530/`
   并且 旧目录保留不被覆盖
@@ -117,7 +117,7 @@ snippet 直接往这个路径写；未来如果真需要 `actionbook research se
   命中: 一次 `/active-research` 真实运行
   假设 执行 `/active-research "some topic"`,经过 plan → fetch → synthesize → render
   当 研究结束
-  那么 `~/.actionbook/research/some-topic/` 存在
+  那么 `~/.actionbook/ascent-research/some-topic/` 存在
   并且 raw/ 里有至少 2 个 `<n>-<source>.json`
   并且 session.log 存在且每行包含 timestamp
   并且 report.html 的 Methodology 段引用了 raw/ 里的文件名作为证据

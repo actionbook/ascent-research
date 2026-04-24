@@ -22,7 +22,8 @@ pub fn is_valid_slug(s: &str) -> bool {
     if s.starts_with('-') || s.ends_with('-') {
         return false;
     }
-    s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Derive a slug from an arbitrary topic string.
@@ -128,7 +129,10 @@ mod tests {
 
     #[test]
     fn derive_strips_punct_and_lowercases() {
-        assert_eq!(derive_slug("Rust async runtime 2026"), "rust-async-runtime-2026");
+        assert_eq!(
+            derive_slug("Rust async runtime 2026"),
+            "rust-async-runtime-2026"
+        );
         assert_eq!(derive_slug("  hello  world! "), "hello-world");
         assert_eq!(derive_slug("--abc--"), "abc");
         assert_eq!(derive_slug(""), "session");

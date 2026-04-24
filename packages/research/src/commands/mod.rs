@@ -4,13 +4,15 @@
 
 pub mod add;
 pub mod add_local;
+pub mod audit;
 pub mod batch;
 pub mod close;
 pub mod coverage;
 pub mod diff;
+pub mod doctor;
+pub mod list;
 #[cfg(feature = "autoresearch")]
 pub mod loop_cmd;
-pub mod list;
 pub mod new;
 pub mod report;
 pub mod resume;

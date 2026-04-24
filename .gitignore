@@ -22,3 +22,8 @@ target
 
 # Research CLI runtime logs (local dev)
 *.log
+
+# Local agent/spec execution traces and ad-hoc e2e fixtures
+.agent-spec/
+docs/superpowers/plans/
+tmp/

@@ -76,10 +76,7 @@ fn lint_reports_orphans_and_broken_links() {
     assert!(!orphan_slugs.contains(&"b"));
 
     let broken = v["data"]["broken_links"].as_array().unwrap();
-    let targets: Vec<&str> = broken
-        .iter()
-        .filter_map(|b| b["to"].as_str())
-        .collect();
+    let targets: Vec<&str> = broken.iter().filter_map(|b| b["to"].as_str()).collect();
     assert!(targets.contains(&"ghost"));
 
     assert!(v["data"]["issues"].as_u64().unwrap() > 0);
@@ -90,10 +87,19 @@ fn lint_flags_stale_pages() {
     let env = Env::new();
     env.seed(
         "lint-stale",
-        &[("old", "---\nupdated: 2020-01-01\n---\nbody"), ("fresh", "---\nupdated: 2099-01-01\n---\nbody")],
+        &[
+            ("old", "---\nupdated: 2020-01-01\n---\nbody"),
+            ("fresh", "---\nupdated: 2099-01-01\n---\nbody"),
+        ],
     );
     let (v, code, _) = env.run(&[
-        "--json", "wiki", "lint", "--slug", "lint-stale", "--stale-days", "7",
+        "--json",
+        "wiki",
+        "lint",
+        "--slug",
+        "lint-stale",
+        "--stale-days",
+        "7",
     ]);
     assert_eq!(code, 0);
     let stale = v["data"]["stale"].as_array().unwrap();
@@ -104,10 +110,7 @@ fn lint_flags_stale_pages() {
 #[test]
 fn lint_logs_event_to_jsonl() {
     let env = Env::new();
-    env.seed(
-        "lint-log",
-        &[("a", "body"), ("b", "links [[a]]")],
-    );
+    env.seed("lint-log", &[("a", "body"), ("b", "links [[a]]")]);
     let (_, code, _) = env.run(&["--json", "wiki", "lint", "--slug", "lint-log"]);
     assert_eq!(code, 0);
 
@@ -124,14 +127,8 @@ fn lint_missing_crossrefs_flags_shared_source() {
     env.seed(
         "lint-xr",
         &[
-            (
-                "a",
-                "---\nsources: [https://ex.com/x]\n---\nno link to b",
-            ),
-            (
-                "b",
-                "---\nsources: [https://ex.com/x]\n---\nno link to a",
-            ),
+            ("a", "---\nsources: [https://ex.com/x]\n---\nno link to b"),
+            ("b", "---\nsources: [https://ex.com/x]\n---\nno link to a"),
         ],
     );
     let (v, code, _) = env.run(&["--json", "wiki", "lint", "--slug", "lint-xr"]);

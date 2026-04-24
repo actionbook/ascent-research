@@ -27,8 +27,20 @@ fn help_lists_all_subcommands() {
     let (stdout, _, code) = run(&["--help"]);
     assert_eq!(code, 0);
     for cmd in [
-        "new", "list", "show", "status", "resume", "add", "sources", "synthesize",
-        "close", "rm", "route", "help",
+        "new",
+        "list",
+        "show",
+        "status",
+        "resume",
+        "add",
+        "sources",
+        "synthesize",
+        "close",
+        "rm",
+        "route",
+        "doctor",
+        "audit",
+        "help",
     ] {
         assert!(
             stdout.contains(cmd),
@@ -42,6 +54,26 @@ fn help_lists_all_subcommands() {
             "global flag `{flag}` missing: {stdout}"
         );
     }
+}
+
+#[test]
+fn doctor_help_lists_command() {
+    let (stdout, _, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("doctor"),
+        "subcommand `doctor` missing from --help: {stdout}"
+    );
+}
+
+#[test]
+fn audit_help_lists_command() {
+    let (stdout, _, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("audit"),
+        "subcommand `audit` missing from --help: {stdout}"
+    );
 }
 
 #[test]

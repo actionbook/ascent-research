@@ -81,8 +81,7 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
         .map(|s| md_parser::parse_findings(s))
         .unwrap_or_default();
     if findings.is_empty() {
-        warnings
-            .push("`## Findings` empty — skipped (numbered sections carry the content)".into());
+        warnings.push("`## Findings` empty — skipped (numbered sections carry the content)".into());
     } else {
         let items: Vec<Value> = findings
             .iter()
@@ -136,10 +135,11 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
     }
 
     // 5. Analysis (Notes section)
-    if let Some(body) = sections.get("Notes") {
-        if !body.trim().is_empty() && !looks_like_placeholder(body) {
-            children.push(section("Analysis", "bulb", vec![prose(body)]));
-        }
+    if let Some(body) = sections.get("Notes")
+        && !body.trim().is_empty()
+        && !looks_like_placeholder(body)
+    {
+        children.push(section("Analysis", "bulb", vec![prose(body)]));
     }
 
     // 5b. Numbered content sections (## 01 · TITLE … ## 06 · TITLE) — the
@@ -148,10 +148,11 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
     // about the legacy Findings / Notes / Conclusion template sections.
     let mut numbered: Vec<(u32, String, String)> = Vec::new();
     for (name, body) in &sections {
-        if let Some((num, title)) = parse_numbered_heading(name) {
-            if !body.trim().is_empty() && !looks_like_placeholder(body) {
-                numbered.push((num, title, body.clone()));
-            }
+        if let Some((num, title)) = parse_numbered_heading(name)
+            && !body.trim().is_empty()
+            && !looks_like_placeholder(body)
+        {
+            numbered.push((num, title, body.clone()));
         }
     }
     numbered.sort_by_key(|(n, _, _)| *n);
@@ -162,10 +163,10 @@ pub fn build(input: &ReportInput) -> Result<ReportBuild, BuildError> {
     }
 
     // 6. Conclusion (optional)
-    if let Some(body) = sections.get("Conclusion") {
-        if !body.trim().is_empty() {
-            children.push(section("Conclusion", "info", vec![prose(body)]));
-        }
+    if let Some(body) = sections.get("Conclusion")
+        && !body.trim().is_empty()
+    {
+        children.push(section("Conclusion", "info", vec![prose(body)]));
     }
 
     // 7. Sources + gather stats

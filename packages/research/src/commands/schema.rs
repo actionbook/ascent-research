@@ -115,6 +115,7 @@ pub fn run_edit(slug_arg: Option<&str>) -> Envelope {
     .with_context(json!({ "session": slug }))
 }
 
+#[allow(clippy::result_large_err)]
 fn resolve_slug(slug_arg: Option<&str>, cmd: &'static str) -> Result<String, Envelope> {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -130,8 +131,10 @@ fn resolve_slug(slug_arg: Option<&str>, cmd: &'static str) -> Result<String, Env
         },
     };
     if !config::exists(&slug) {
-        return Err(Envelope::fail(cmd, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
-            .with_context(json!({ "session": slug })));
+        return Err(
+            Envelope::fail(cmd, "SESSION_NOT_FOUND", format!("no session '{slug}'"))
+                .with_context(json!({ "session": slug })),
+        );
     }
     Ok(slug)
 }

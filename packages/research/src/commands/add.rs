@@ -3,12 +3,15 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
-use crate::fetch::{self, smell::{ShortBodyMode, SmellConfig}};
+use crate::fetch::{
+    self,
+    smell::{ShortBodyMode, SmellConfig},
+};
 use crate::output::Envelope;
 use crate::route::{self, Executor as RouteExecutor};
 use crate::session::{
     active, config,
-    event::{RejectReason, RouteDecision, SessionEvent},
+    event::{RejectReason, RouteDecision, SessionEvent, ToolCallStatus},
     layout, log, sources_block,
 };
 
@@ -87,7 +90,11 @@ pub fn run(
         )
         .with_context(json!({ "session": slug, "url": url }))
         .with_details(reject_details(
-            &RouteDecision { executor: "n/a".into(), kind: "duplicate".into(), command_template: "".into() },
+            &RouteDecision {
+                executor: "n/a".into(),
+                kind: "duplicate".into(),
+                command_template: "".into(),
+            },
             RejectReason::Duplicate,
             0,
             None,
@@ -138,6 +145,18 @@ pub fn run(
     };
 
     let fetch_start = std::time::Instant::now();
+    let call_id = format!("fetch-{raw_n}");
+    let started = SessionEvent::ToolCallStarted {
+        timestamp: Utc::now(),
+        call_id: call_id.clone(),
+        hand: hand_name(&route_decision.executor).into(),
+        tool: tool_name(&route_decision.executor).into(),
+        input_summary: format!("url={url} kind={} readable={readable}", r.kind),
+        note: None,
+    };
+    if let Err(e) = log::append(&slug, &started) {
+        return Envelope::fail(CMD, "IO_ERROR", format!("append tool_call_started: {e}"));
+    }
     let (raw_bytes, outcome, executor_str) = fetch::execute(
         &route_decision,
         &slug,
@@ -153,7 +172,11 @@ pub fn run(
     if let Err(e) = fs::create_dir_all(&raw_dir) {
         return Envelope::fail(CMD, "IO_ERROR", format!("create raw/: {e}"));
     }
-    let base = format!("{raw_n}-{kind}-{host}", kind = r.kind, host = sanitize(&host));
+    let base = format!(
+        "{raw_n}-{kind}-{host}",
+        kind = r.kind,
+        host = sanitize(&host)
+    );
 
     if outcome.accepted {
         let raw_path = raw_dir.join(format!("{base}.json"));
@@ -162,6 +185,23 @@ pub fn run(
         }
 
         let trust = trust_score(r.executor, readable, outcome.bytes);
+        let completed = SessionEvent::ToolCallCompleted {
+            timestamp: Utc::now(),
+            call_id,
+            status: ToolCallStatus::Ok,
+            duration_ms,
+            output_summary: output_summary(
+                outcome.bytes,
+                outcome.observed_bytes,
+                &outcome.warnings,
+            ),
+            artifact_refs: vec![rel_path(&raw_path)],
+            error_code: None,
+            note: None,
+        };
+        if let Err(e) = log::append(&slug, &completed) {
+            return Envelope::fail(CMD, "IO_ERROR", format!("append tool_call_completed: {e}"));
+        }
         let accepted_ev = SessionEvent::SourceAccepted {
             timestamp: Utc::now(),
             url: url.into(),
@@ -214,6 +254,24 @@ pub fn run(
 
     let reason = outcome.reject_reason.unwrap_or(RejectReason::FetchFailed);
     let fetch_success = !matches!(reason, RejectReason::FetchFailed);
+    let status = if fetch_success {
+        ToolCallStatus::Ok
+    } else {
+        ToolCallStatus::Error
+    };
+    let completed = SessionEvent::ToolCallCompleted {
+        timestamp: Utc::now(),
+        call_id,
+        status,
+        duration_ms,
+        output_summary: output_summary(outcome.bytes, outcome.observed_bytes, &outcome.warnings),
+        artifact_refs: vec![rel_path(&rejected_path)],
+        error_code: (!fetch_success).then(|| reason_str(reason).to_string()),
+        note: None,
+    };
+    if let Err(e) = log::append(&slug, &completed) {
+        return Envelope::fail(CMD, "IO_ERROR", format!("append tool_call_completed: {e}"));
+    }
 
     let rejected_ev = SessionEvent::SourceRejected {
         timestamp: Utc::now(),
@@ -280,6 +338,31 @@ fn reason_str(r: RejectReason) -> &'static str {
     }
 }
 
+fn hand_name(executor: &str) -> &'static str {
+    match executor {
+        "postagent" => "postagent",
+        "browser" => "actionbook",
+        "local" => "local",
+        _ => "research-cli",
+    }
+}
+
+fn tool_name(executor: &str) -> &'static str {
+    match executor {
+        "postagent" => "postagent send",
+        "browser" => "actionbook browser",
+        "local" => "local read_file",
+        _ => "research-cli",
+    }
+}
+
+fn output_summary(bytes: u64, observed_bytes: u64, warnings: &[String]) -> String {
+    format!(
+        "bytes={bytes} observed_bytes={observed_bytes} warnings={}",
+        warnings.len()
+    )
+}
+
 fn looks_like_article(url: &str) -> bool {
     let l = url.to_lowercase();
     ["/blog/", "/post/", "/rfd/", "/paper/", "/article/"]
@@ -289,7 +372,9 @@ fn looks_like_article(url: &str) -> bool {
 }
 
 fn extract_host(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
     let authority = rest.split('/').next()?;
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     Some(host.split(':').next()?.to_ascii_lowercase())
@@ -297,7 +382,13 @@ fn extract_host(url: &str) -> Option<String> {
 
 fn sanitize(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 

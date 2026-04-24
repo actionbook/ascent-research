@@ -49,6 +49,20 @@ impl Env {
         fs::write(self.session_dir(slug).join("session.md"), body).unwrap();
     }
 
+    fn prep_fact_check_session(&self, slug: &str, body: &str) {
+        let (_, code, stderr) = self.research(&[
+            "new",
+            "topic",
+            "--slug",
+            slug,
+            "--tag",
+            "fact-check",
+            "--json",
+        ]);
+        assert_eq!(code, 0, "new failed: {stderr}");
+        fs::write(self.session_dir(slug).join("session.md"), body).unwrap();
+    }
+
     fn append_jsonl(&self, slug: &str, lines: &[&str]) {
         let path = self.session_dir(slug).join("session.jsonl");
         let mut current = fs::read_to_string(&path).unwrap_or_default();
@@ -66,6 +80,31 @@ fn accepted_event(ts: &str, url: &str, kind: &str, bytes: u64) -> String {
     )
 }
 
+fn digested_event(ts: &str, url: &str) -> String {
+    format!(
+        r###"{{"event":"source_digested","timestamp":"{ts}","iteration":1,"url":"{url}","into_section":"## Overview"}}"###
+    )
+}
+
+fn fact_checked_event(ts: &str, url: &str, outcome: &str) -> String {
+    format!(
+        r###"{{"event":"fact_checked","timestamp":"{ts}","iteration":1,"claim":"claim","query":"query","sources":["{url}"],"outcome":"{outcome}","into_section":"## Overview"}}"###
+    )
+}
+
+fn report_ready_md(url: &str) -> String {
+    let overview: String = "z".repeat(300);
+    format!(
+        "## Overview\n{overview}\n\n## 01 · A\nbody a.\n\n## 02 · B\nbody b.\n\n## 03 · C\nbody c.\n\n![f](diagrams/g.svg)\n\nSee [x]({url}).\n"
+    )
+}
+
+fn resolve_report_ready_diagram(env: &Env, slug: &str) {
+    let diag = env.session_dir(slug).join("diagrams");
+    fs::create_dir_all(&diag).unwrap();
+    fs::write(diag.join("g.svg"), "<svg/>").unwrap();
+}
+
 // ── diff tests ────────────────────────────────────────────────────────────
 
 #[test]
@@ -77,14 +116,21 @@ fn diff_finds_unused_accepted_source() {
     );
     env.append_jsonl(
         "d1",
-        &[
-            &accepted_event("2026-04-20T10:00:00Z", "https://fetched-but-uncited.test/", "k", 1),
-        ],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://fetched-but-uncited.test/",
+            "k",
+            1,
+        )],
     );
     let (v, code, _) = env.research(&["diff", "d1", "--json"]);
     assert_eq!(code, 0);
     let unused = v["data"]["unused_sources"].as_array().unwrap();
-    assert!(unused.iter().any(|u| u.as_str() == Some("https://fetched-but-uncited.test/")));
+    assert!(
+        unused
+            .iter()
+            .any(|u| u.as_str() == Some("https://fetched-but-uncited.test/"))
+    );
 }
 
 #[test]
@@ -98,24 +144,39 @@ fn diff_finds_hallucinated_md_link() {
     let (v, code, _) = env.research(&["diff", "d2", "--json"]);
     assert_eq!(code, 0);
     let missing = v["data"]["missing_sources"].as_array().unwrap();
-    assert!(missing.iter().any(|u| u.as_str() == Some("https://hallucinated.test/")));
+    assert!(
+        missing
+            .iter()
+            .any(|u| u.as_str() == Some("https://hallucinated.test/"))
+    );
 }
 
 #[test]
 fn diff_unused_only_flag_excludes_missing() {
     let env = Env::new();
-    env.prep_session(
-        "d3",
-        "## Overview\nBody cites [x](https://hall.test/).\n",
-    );
+    env.prep_session("d3", "## Overview\nBody cites [x](https://hall.test/).\n");
     env.append_jsonl(
         "d3",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://unused.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://unused.test/",
+            "k",
+            1,
+        )],
     );
     let (v, code, _) = env.research(&["diff", "d3", "--unused-only", "--json"]);
     assert_eq!(code, 0);
-    assert!(v["data"]["unused_sources"].as_array().unwrap().iter().any(|u| u.as_str() == Some("https://unused.test/")));
-    assert!(v["data"].get("missing_sources").is_none(), "--unused-only suppresses missing set");
+    assert!(
+        v["data"]["unused_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u.as_str() == Some("https://unused.test/"))
+    );
+    assert!(
+        v["data"].get("missing_sources").is_none(),
+        "--unused-only suppresses missing set"
+    );
 }
 
 #[test]
@@ -149,13 +210,22 @@ fn diff_excludes_sources_block_from_body_scan() {
     );
     env.append_jsonl(
         "d5",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://cache.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://cache.test/",
+            "k",
+            1,
+        )],
     );
     let (v, code, _) = env.research(&["diff", "d5", "--json"]);
     assert_eq!(code, 0);
     // Accepted but not cited outside the sources block → unused
     let unused = v["data"]["unused_sources"].as_array().unwrap();
-    assert!(unused.iter().any(|u| u.as_str() == Some("https://cache.test/")));
+    assert!(
+        unused
+            .iter()
+            .any(|u| u.as_str() == Some("https://cache.test/"))
+    );
 }
 
 // ── coverage tests ───────────────────────────────────────────────────────
@@ -174,7 +244,12 @@ fn coverage_basic_counts() {
     fs::write(diag.join("a.svg"), "<svg/>").unwrap();
     env.append_jsonl(
         "c1",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://x.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://x.test/",
+            "k",
+            1,
+        )],
     );
 
     let (v, code, _) = env.research(&["coverage", "c1", "--json"]);
@@ -201,13 +276,171 @@ fn coverage_report_ready_all_green() {
     fs::write(diag.join("g.svg"), "<svg/>").unwrap();
     env.append_jsonl(
         "c2",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://ok.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://ok.test/",
+            "k",
+            1,
+        )],
     );
 
     let (v, code, _) = env.research(&["coverage", "c2", "--json"]);
     assert_eq!(code, 0);
     assert_eq!(v["data"]["report_ready"], true);
-    assert_eq!(v["data"]["report_ready_blockers"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        v["data"]["report_ready_blockers"].as_array().unwrap().len(),
+        0
+    );
+}
+
+#[test]
+fn coverage_fact_check_tag_blocks_without_fact_checked_event() {
+    let env = Env::new();
+    let url = "https://official.test/roster";
+    env.prep_fact_check_session("fcov1", &report_ready_md(url));
+    resolve_report_ready_diagram(&env, "fcov1");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", url, "official", 1);
+    env.append_jsonl("fcov1", &[&accepted]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov1", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_check_required"], true);
+    assert_eq!(v["data"]["report_ready"], false);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("fact_checks_total 0 < 1")),
+        "expected fact-check blocker; got: {blockers:?}"
+    );
+}
+
+#[test]
+fn coverage_fact_check_tag_ready_with_fact_checked_event() {
+    let env = Env::new();
+    let url = "https://official.test/roster";
+    env.prep_fact_check_session("fcov2", &report_ready_md(url));
+    resolve_report_ready_diagram(&env, "fcov2");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", url, "official", 1);
+    let digested = digested_event("2026-04-20T10:00:30Z", url);
+    let checked = fact_checked_event("2026-04-20T10:01:00Z", url, "supported");
+    env.append_jsonl("fcov2", &[&accepted, &digested, &checked]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov2", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_check_required"], true);
+    assert_eq!(v["data"]["fact_checks_total"], 1);
+    assert_eq!(v["data"]["fact_checks_supported"], 1);
+    assert_eq!(v["data"]["fact_checks_refuted"], 0);
+    assert_eq!(v["data"]["fact_checks_uncertain"], 0);
+    assert_eq!(v["data"]["fact_check_invalid_sources"], 0);
+    assert_eq!(v["data"]["fact_check_undigested_sources"], 0);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        !blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("fact_check")),
+        "unexpected fact-check blocker: {blockers:?}"
+    );
+}
+
+#[test]
+fn coverage_fact_check_invalid_sources_blocks_report_ready() {
+    let env = Env::new();
+    let cited_url = "https://official.test/roster";
+    let missing_url = "https://missing-source.test/";
+    env.prep_fact_check_session("fcov3", &report_ready_md(cited_url));
+    resolve_report_ready_diagram(&env, "fcov3");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", cited_url, "official", 1);
+    let checked = fact_checked_event("2026-04-20T10:01:00Z", missing_url, "uncertain");
+    env.append_jsonl("fcov3", &[&accepted, &checked]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov3", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_check_invalid_sources"], 1);
+    assert_eq!(v["data"]["report_ready"], false);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        blockers.iter().any(|b| {
+            b.as_str()
+                .unwrap()
+                .contains("fact_check_invalid_sources 1 > 0")
+        }),
+        "expected invalid-source blocker; got: {blockers:?}"
+    );
+}
+
+#[test]
+fn coverage_fact_check_refuted_blocks_report_ready() {
+    let env = Env::new();
+    let url = "https://official.test/roster";
+    env.prep_fact_check_session("fcov4", &report_ready_md(url));
+    resolve_report_ready_diagram(&env, "fcov4");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", url, "official", 1);
+    let digested = digested_event("2026-04-20T10:00:30Z", url);
+    let checked = fact_checked_event("2026-04-20T10:01:00Z", url, "refuted");
+    env.append_jsonl("fcov4", &[&accepted, &digested, &checked]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov4", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_checks_refuted"], 1);
+    assert_eq!(v["data"]["report_ready"], false);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("fact_checks_refuted 1 > 0")),
+        "expected refuted blocker; got: {blockers:?}"
+    );
+}
+
+#[test]
+fn coverage_fact_check_uncertain_blocks_report_ready() {
+    let env = Env::new();
+    let url = "https://official.test/roster";
+    env.prep_fact_check_session("fcov5", &report_ready_md(url));
+    resolve_report_ready_diagram(&env, "fcov5");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", url, "official", 1);
+    let digested = digested_event("2026-04-20T10:00:30Z", url);
+    let checked = fact_checked_event("2026-04-20T10:01:00Z", url, "uncertain");
+    env.append_jsonl("fcov5", &[&accepted, &digested, &checked]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov5", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_checks_uncertain"], 1);
+    assert_eq!(v["data"]["report_ready"], false);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("fact_checks_uncertain 1 > 0")),
+        "expected uncertain blocker; got: {blockers:?}"
+    );
+}
+
+#[test]
+fn coverage_fact_check_undigested_sources_blocks_report_ready() {
+    let env = Env::new();
+    let url = "https://official.test/roster";
+    env.prep_fact_check_session("fcov6", &report_ready_md(url));
+    resolve_report_ready_diagram(&env, "fcov6");
+    let accepted = accepted_event("2026-04-20T10:00:00Z", url, "official", 1);
+    let checked = fact_checked_event("2026-04-20T10:01:00Z", url, "supported");
+    env.append_jsonl("fcov6", &[&accepted, &checked]);
+
+    let (v, code, _) = env.research(&["coverage", "fcov6", "--json"]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["fact_check_undigested_sources"], 1);
+    assert_eq!(v["data"]["report_ready"], false);
+    let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
+    assert!(
+        blockers.iter().any(|b| {
+            b.as_str()
+                .unwrap()
+                .contains("fact_check_undigested_sources 1 > 0")
+        }),
+        "expected undigested-source blocker; got: {blockers:?}"
+    );
 }
 
 #[test]
@@ -218,26 +451,39 @@ fn coverage_short_overview_blocks() {
     assert_eq!(code, 0);
     assert_eq!(v["data"]["report_ready"], false);
     let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
-    assert!(blockers.iter().any(|b| b.as_str().unwrap().contains("overview_chars")));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("overview_chars"))
+    );
 }
 
 #[test]
 fn coverage_no_diagram_blocks() {
     let env = Env::new();
     let overview: String = "y".repeat(300);
-    let md = format!("## Overview\n{overview}\n\n## 01 · A\nbody a.\n\n## 02 · B\nbody b.\n\n## 03 · C\nbody c.\n");
+    let md = format!(
+        "## Overview\n{overview}\n\n## 01 · A\nbody a.\n\n## 02 · B\nbody b.\n\n## 03 · C\nbody c.\n"
+    );
     env.prep_session("c4", &md);
     env.append_jsonl(
         "c4",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://ok.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://ok.test/",
+            "k",
+            1,
+        )],
     );
     let (v, code, _) = env.research(&["coverage", "c4", "--json"]);
     assert_eq!(code, 0);
     assert_eq!(v["data"]["report_ready"], false);
     let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
-    assert!(blockers
-        .iter()
-        .any(|b| b.as_str().unwrap().contains("diagrams_referenced")));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("diagrams_referenced"))
+    );
 }
 
 #[test]
@@ -253,15 +499,22 @@ fn coverage_hallucinated_source_blocks() {
     fs::write(diag.join("g.svg"), "<svg/>").unwrap();
     env.append_jsonl(
         "c5",
-        &[&accepted_event("2026-04-20T10:00:00Z", "https://ok.test/", "k", 1)],
+        &[&accepted_event(
+            "2026-04-20T10:00:00Z",
+            "https://ok.test/",
+            "k",
+            1,
+        )],
     );
     let (v, code, _) = env.research(&["coverage", "c5", "--json"]);
     assert_eq!(code, 0);
     assert_eq!(v["data"]["report_ready"], false);
     let blockers = v["data"]["report_ready_blockers"].as_array().unwrap();
-    assert!(blockers
-        .iter()
-        .any(|b| b.as_str().unwrap().contains("sources_hallucinated")));
+    assert!(
+        blockers
+            .iter()
+            .any(|b| b.as_str().unwrap().contains("sources_hallucinated"))
+    );
 }
 
 // v2 Step 2 — source_kind_diversity (output-only, non-blocker) ───────────
@@ -270,9 +523,8 @@ fn coverage_hallucinated_source_blocks() {
 fn coverage_reports_source_kind_diversity() {
     let env = Env::new();
     let overview: String = "y".repeat(300);
-    let md = format!(
-        "## Overview\n{overview}\n\n## 01 · A\na.\n\n## 02 · B\nb.\n\n## 03 · C\nc.\n"
-    );
+    let md =
+        format!("## Overview\n{overview}\n\n## 01 · A\na.\n\n## 02 · B\nb.\n\n## 03 · C\nc.\n");
     env.prep_session("cdiv", &md);
     env.append_jsonl(
         "cdiv",

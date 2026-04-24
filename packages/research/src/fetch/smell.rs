@@ -72,13 +72,13 @@ pub fn judge_api(r: &ApiResponse) -> FetchOutcome {
         warnings: Vec::new(),
         bytes: r.body_bytes,
     };
-    if let Some(status) = r.status {
-        if !(200..300).contains(&status) {
-            outcome.accepted = false;
-            outcome.reject_reason = Some(RejectReason::ApiError);
-            outcome.warnings.push(format!("http status {status}"));
-            return outcome;
-        }
+    if let Some(status) = r.status
+        && !(200..300).contains(&status)
+    {
+        outcome.accepted = false;
+        outcome.reject_reason = Some(RejectReason::ApiError);
+        outcome.warnings.push(format!("http status {status}"));
+        return outcome;
     }
     if !r.body_non_empty {
         outcome.accepted = false;
@@ -118,7 +118,9 @@ pub fn judge_browser_with(r: &BrowserResponse, cfg: SmellConfig) -> FetchOutcome
     {
         outcome.accepted = false;
         outcome.reject_reason = Some(RejectReason::WrongUrl);
-        outcome.warnings.push(format!("observed url suspicious: '{obs}'"));
+        outcome
+            .warnings
+            .push(format!("observed url suspicious: '{obs}'"));
         return outcome;
     }
 
@@ -195,7 +197,10 @@ fn split_host_path(url: &str) -> (String, String) {
     let no_frag = rest.split('#').next().unwrap_or("");
     let no_query = no_frag.split('?').next().unwrap_or("");
     match no_query.find('/') {
-        Some(i) => (no_query[..i].to_ascii_lowercase(), no_query[i..].to_string()),
+        Some(i) => (
+            no_query[..i].to_ascii_lowercase(),
+            no_query[i..].to_string(),
+        ),
         None => (no_query.to_ascii_lowercase(), String::new()),
     }
 }
@@ -327,7 +332,7 @@ mod tests {
         let r = BrowserResponse {
             requested_url: "https://example.com/",
             observed_url: "https://example.com/",
-            body_bytes: &vec![b'x'; 55],
+            body_bytes: &[b'x'; 55],
             readable_mode: false,
         };
         let cfg = SmellConfig {

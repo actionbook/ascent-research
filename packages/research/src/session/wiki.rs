@@ -89,7 +89,12 @@ pub fn append_page(
     body: &str,
     stamp: &str,
 ) -> Result<PathBuf, WikiError> {
-    append_page_in(&layout::session_wiki_dir(session_slug), page_slug, body, stamp)
+    append_page_in(
+        &layout::session_wiki_dir(session_slug),
+        page_slug,
+        body,
+        stamp,
+    )
 }
 
 /// Read a wiki page. NotFound when the file is missing.
@@ -166,10 +171,7 @@ pub fn read_page_in(wiki_dir: &std::path::Path, page_slug: &str) -> Result<Strin
     })
 }
 
-pub fn remove_page_in(
-    wiki_dir: &std::path::Path,
-    page_slug: &str,
-) -> Result<PathBuf, WikiError> {
+pub fn remove_page_in(wiki_dir: &std::path::Path, page_slug: &str) -> Result<PathBuf, WikiError> {
     validate_slug(page_slug)?;
     let path = wiki_dir.join(format!("{page_slug}.md"));
     if !path.exists() {
@@ -222,7 +224,10 @@ pub fn split_frontmatter(body: &str) -> (Frontmatter, &str) {
     }
     // Find closing `\n---\n`.
     let after_open = &trimmed[4..];
-    let Some(close_rel) = after_open.find("\n---\n").or_else(|| after_open.find("\n---\r\n")) else {
+    let Some(close_rel) = after_open
+        .find("\n---\n")
+        .or_else(|| after_open.find("\n---\r\n"))
+    else {
         return (Frontmatter::default(), body);
     };
     let yaml = &after_open[..close_rel];
@@ -257,10 +262,10 @@ fn parse_simple_yaml(yaml: &str) -> Frontmatter {
 
 fn strip_quotes(s: &str) -> &str {
     let t = s.trim();
-    if (t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')) {
-        if t.len() >= 2 {
-            return &t[1..t.len() - 1];
-        }
+    if ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
+        && t.len() >= 2
+    {
+        return &t[1..t.len() - 1];
     }
     t
 }
@@ -327,9 +332,21 @@ mod tests {
     #[test]
     fn slug_rejects_empty_too_long_and_bad_chars() {
         assert!(matches!(validate_slug(""), Err(WikiError::SlugInvalid(_))));
-        assert!(matches!(validate_slug(&"a".repeat(65)), Err(WikiError::SlugInvalid(_))));
-        for s in ["Scheduler", "with.dot", "with/slash", "spaces here", "bang!"] {
-            assert!(matches!(validate_slug(s), Err(WikiError::SlugInvalid(_))), "{s}");
+        assert!(matches!(
+            validate_slug(&"a".repeat(65)),
+            Err(WikiError::SlugInvalid(_))
+        ));
+        for s in [
+            "Scheduler",
+            "with.dot",
+            "with/slash",
+            "spaces here",
+            "bang!",
+        ] {
+            assert!(
+                matches!(validate_slug(s), Err(WikiError::SlugInvalid(_))),
+                "{s}"
+            );
         }
     }
 
@@ -387,8 +404,14 @@ mod tests {
         let tmp = tmp_wiki_dir();
         create_page_in(tmp.path(), "x", "body").unwrap();
         remove_page_in(tmp.path(), "x").unwrap();
-        assert!(matches!(read_page_in(tmp.path(), "x"), Err(WikiError::NotFound(_))));
-        assert!(matches!(remove_page_in(tmp.path(), "x"), Err(WikiError::NotFound(_))));
+        assert!(matches!(
+            read_page_in(tmp.path(), "x"),
+            Err(WikiError::NotFound(_))
+        ));
+        assert!(matches!(
+            remove_page_in(tmp.path(), "x"),
+            Err(WikiError::NotFound(_))
+        ));
     }
 
     #[test]

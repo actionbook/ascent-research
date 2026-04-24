@@ -81,10 +81,10 @@ pub fn validate(svg: &str) -> Result<(), SvgRejection> {
 
 fn strip_leading_xml_decl(s: &str) -> &str {
     let s = s.trim_start();
-    if let Some(rest) = s.strip_prefix("<?xml") {
-        if let Some(end) = rest.find("?>") {
-            return rest[end + 2..].trim_start();
-        }
+    if let Some(rest) = s.strip_prefix("<?xml")
+        && let Some(end) = rest.find("?>")
+    {
+        return rest[end + 2..].trim_start();
     }
     s
 }
@@ -136,7 +136,8 @@ mod tests {
 
     #[test]
     fn accepts_xml_decl_and_whitespace_prefix() {
-        let svg = "  \n<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
+        let svg =
+            "  \n<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
         assert!(validate(svg).is_ok());
     }
 
@@ -175,7 +176,10 @@ mod tests {
     #[test]
     fn rejects_foreign_object() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div/></foreignObject></svg>"#;
-        assert_eq!(validate(svg).unwrap_err(), SvgRejection::ContainsForeignObject);
+        assert_eq!(
+            validate(svg).unwrap_err(),
+            SvgRejection::ContainsForeignObject
+        );
     }
 
     #[test]
@@ -194,13 +198,19 @@ mod tests {
     fn accepts_polygon_not_an_on_handler() {
         // "polygon" contains the substring "on" but is not a handler.
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><polygon points="0,0 1,1"/></svg>"#;
-        assert!(validate(svg).is_ok(), "polygon must not trip on-handler check");
+        assert!(
+            validate(svg).is_ok(),
+            "polygon must not trip on-handler check"
+        );
     }
 
     #[test]
     fn rejects_javascript_url() {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><a xlink:href="javascript:alert(1)"/></svg>"#;
-        assert_eq!(validate(svg).unwrap_err(), SvgRejection::ContainsJavascriptUrl);
+        assert_eq!(
+            validate(svg).unwrap_err(),
+            SvgRejection::ContainsJavascriptUrl
+        );
     }
 
     #[test]

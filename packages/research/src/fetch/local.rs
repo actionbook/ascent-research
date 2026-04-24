@@ -78,8 +78,7 @@ impl std::fmt::Display for LocalError {
 ///   doubt). Files above cap return TooLarge without reading the body.
 pub fn read_file(path: &Path, max_bytes: u64) -> Result<LocalRead, LocalError> {
     let start = Instant::now();
-    let meta = fs::metadata(path)
-        .map_err(|e| LocalError::NotReadable(format!("stat: {e}")))?;
+    let meta = fs::metadata(path).map_err(|e| LocalError::NotReadable(format!("stat: {e}")))?;
     if meta.is_dir() {
         return Err(LocalError::IsDirectory);
     }
@@ -170,7 +169,11 @@ pub fn walk_tree(
     let mut total_bytes: u64 = 0;
 
     // WalkDir handles both "root is a file" and "root is a dir".
-    for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -324,7 +327,7 @@ mod tests {
         // --max-file-bytes contract; the fetch-stage backstop must be
         // loose enough that reasonable user overrides (up to several
         // MB) flow through without being clipped at fetch time.
-        assert!(FETCH_STAGE_BACKSTOP_BYTES > DEFAULT_MAX_FILE_BYTES);
+        const { assert!(FETCH_STAGE_BACKSTOP_BYTES > DEFAULT_MAX_FILE_BYTES) };
         // A user asking for 1 MB should be honored by the fetch stage.
         let one_mb: u64 = 1024 * 1024;
         assert!(FETCH_STAGE_BACKSTOP_BYTES >= one_mb);
@@ -361,16 +364,14 @@ mod tests {
     #[test]
     fn walk_filters_with_glob_include() {
         let dir = make_tree();
-        let r = walk_tree(
-            dir.path(),
-            &["**/*.rs".into()],
-            1_000_000,
-            10_000_000,
-        )
-        .unwrap();
+        let r = walk_tree(dir.path(), &["**/*.rs".into()], 1_000_000, 10_000_000).unwrap();
         // 5 .rs files (a, b, sub/c, sub/big, test/skip_me)
         assert_eq!(r.accepted.len(), 5);
-        assert!(r.accepted.iter().all(|f| f.path.extension().unwrap() == "rs"));
+        assert!(
+            r.accepted
+                .iter()
+                .all(|f| f.path.extension().unwrap() == "rs")
+        );
     }
 
     #[test]
@@ -386,7 +387,13 @@ mod tests {
         let accepted_rels: Vec<_> = r
             .accepted
             .iter()
-            .map(|f| f.path.strip_prefix(dir.path()).unwrap().to_string_lossy().into_owned())
+            .map(|f| {
+                f.path
+                    .strip_prefix(dir.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         assert!(accepted_rels.iter().all(|r| !r.starts_with("test/")));
         assert!(accepted_rels.iter().any(|r| r == "a.rs"));
@@ -407,7 +414,11 @@ mod tests {
         // Total cap too small to fit even one .rs file plus anything else.
         let r = walk_tree(dir.path(), &["**/*.rs".into()], 10_000, 20).unwrap();
         assert!(r.total_bytes <= 20);
-        assert!(r.skipped.iter().any(|s| s.reason.starts_with("total_cap_reached")));
+        assert!(
+            r.skipped
+                .iter()
+                .any(|s| s.reason.starts_with("total_cap_reached"))
+        );
     }
 
     #[test]

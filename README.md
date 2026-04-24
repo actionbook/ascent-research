@@ -151,11 +151,11 @@ deterministically without parsing prose.
 ## Install
 
 ```bash
-git clone https://github.com/ZhangHanDong/ascent-research
+git clone https://github.com/actionbook/ascent-research
 cd ascent-research
 
 # Full build (loop + Claude provider) — what live sessions need
-cargo build -p ascent-research --release --features "autoresearch provider-claude"
+cargo build -p ascent-research --release --features "autoresearch provider-claude provider-codex"
 
 export PATH="$PWD/target/release:$PATH"
 ascent-research --help

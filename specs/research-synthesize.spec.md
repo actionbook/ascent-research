@@ -96,7 +96,7 @@ json-ui 报告"的机械组装器。
     - session.md 含 `## Overview / ## Findings(3 项)/ ## Notes`
     - 3 个 accepted sources
   当 `research synthesize happy`
-  那么 `~/.actionbook/research/happy/report.json` 存在且合法 json-ui schema
+  那么 `~/.actionbook/ascent-research/happy/report.json` 存在且合法 json-ui schema
   并且 `report.html` 存在(>= 10KB)
   并且 session.jsonl 末尾有 `synthesize_completed` 事件
   并且 report.json 含 BrandHeader / Overview / Key Findings / Analysis / Sources / Methodology / BrandFooter
