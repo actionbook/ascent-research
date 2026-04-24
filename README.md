@@ -1,5 +1,8 @@
 # ascent-research
 
+[![Crates.io](https://img.shields.io/crates/v/ascent-research.svg)](https://crates.io/crates/ascent-research)
+[![GitHub Release](https://img.shields.io/github/v/release/actionbook/ascent-research)](https://github.com/actionbook/ascent-research/releases)
+
 > **Your agent's next step up. Every session picks up where you left off. Every turn goes higher.**
 
 **One-line pitch.** `ascent-research` is an incremental research workflow CLI for AI agents: point it at a topic / source tree / Obsidian vault, and it will *keep* researching across sessions — fetching, citing, diagramming, and accreting a durable wiki you can come back to tomorrow and pick up exactly where you stopped.
