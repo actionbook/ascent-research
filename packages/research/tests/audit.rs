@@ -1,6 +1,8 @@
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
@@ -120,6 +122,44 @@ fn source_accepted(url: &str) -> String {
     )
 }
 
+fn make_coverage_ready(env: &Env, slug: &str, url: &str) {
+    let overview = "Overview body with enough grounded context to satisfy coverage readiness. ".repeat(5);
+    fs::write(
+        env.session_dir(slug).join("session.md"),
+        format!(
+            "\
+# Research
+
+## Overview
+{overview}
+
+## 01 · WHY
+This section cites [the accepted source]({url}).
+
+## 02 · HOW
+This section preserves a diagram reference.
+
+![diagram](diagrams/g.svg)
+
+## 03 · WHAT
+This section closes the minimum numbered-section gate.
+
+## Sources
+<!-- research:sources-start -->
+<!-- research:sources-end -->
+"
+        ),
+    )
+    .unwrap();
+    let diagram_dir = env.session_dir(slug).join("diagrams");
+    fs::create_dir_all(&diagram_dir).unwrap();
+    fs::write(
+        diagram_dir.join("g.svg"),
+        r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
+    )
+    .unwrap();
+}
+
 fn source_digested(url: &str) -> String {
     format!(
         r###"{{"event":"source_digested","timestamp":"2026-04-20T10:00:30Z","iteration":1,"url":"{url}","into_section":"## Overview"}}"###
@@ -182,6 +222,7 @@ fn audit_summarizes_tool_and_fact_check_trace() {
     let slug = "audit-complete";
     let url = "https://www.nba.com/lakers/roster";
     env.new_session(slug, &["fact-check"]);
+    make_coverage_ready(&env, slug, url);
     env.append_jsonl(
         slug,
         &[
@@ -227,7 +268,9 @@ fn audit_summarizes_tool_and_fact_check_trace() {
 fn audit_reports_bilingual_html_status() {
     let env = Env::new();
     let slug = "audit-bilingual";
+    let url = "https://example.com/bilingual-source";
     env.new_session(slug, &[]);
+    make_coverage_ready(&env, slug, url);
     fs::write(
         env.session_dir(slug).join("report.html"),
         r#"<div class="lang-switch"><button data-mode="zh">中文</button></div><p>English.</p><p class="tr-zh" lang="zh-CN">中文。</p>"#,
@@ -236,6 +279,7 @@ fn audit_reports_bilingual_html_status() {
     env.append_jsonl(
         slug,
         &[
+            source_accepted(url),
             synthesize_started_bilingual("codex"),
             synthesize_completed(),
         ],
@@ -456,6 +500,59 @@ fn audit_reports_event_log_unknown_events() {
     assert_eq!(v["data"]["audit_status"], "incomplete");
     let blockers = v["data"]["audit_blockers"].as_array().unwrap();
     assert!(array_contains_str(blockers, "event_log_unknown_events"));
+}
+
+#[test]
+fn audit_embeds_coverage_and_blocks_when_not_ready() {
+    let env = Env::new();
+    let slug = "audit-coverage-drift";
+    env.new_session(slug, &[]);
+    env.append_jsonl(slug, &[synthesize_completed()]);
+
+    let (v, code, stderr, _) = env.research(&["--json", "audit", slug]);
+    assert_eq!(code, 0, "stderr={stderr}; envelope={v}");
+    assert_eq!(v["data"]["coverage"]["report_ready"], false);
+    assert_eq!(v["data"]["audit_status"], "incomplete");
+    let blockers = v["data"]["audit_blockers"].as_array().unwrap();
+    assert!(array_contains_str(blockers, "coverage"));
+}
+
+#[test]
+fn audit_embedded_coverage_does_not_call_external_hands() {
+    let env = Env::new();
+    let slug = "audit-no-hands";
+    env.new_session(slug, &[]);
+    let marker = env.session_dir(slug).join("external-hand-called");
+    let trap = env.session_dir(slug).join("trap-bin");
+    fs::write(
+        &trap,
+        format!("#!/bin/sh\necho called > '{}'\nexit 99\n", marker.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&trap).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&trap, perms).unwrap();
+    }
+
+    let out = Command::new(research_bin())
+        .args(["--json", "audit", slug])
+        .env("ACTIONBOOK_RESEARCH_HOME", &env.home)
+        .env("POSTAGENT_BIN", &trap)
+        .env("ACTIONBOOK_BIN", &trap)
+        .output()
+        .expect("spawn ascent-research");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let json_line = stdout.lines().find(|l| l.trim_start().starts_with('{'));
+    let v: Value = match json_line {
+        Some(line) => serde_json::from_str(line).unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+
+    assert_eq!(out.status.code().unwrap_or(-1), 0, "{v}");
+    assert!(v["data"]["coverage"].is_object());
+    assert!(!marker.exists(), "audit must not call postagent/actionbook");
 }
 
 #[test]

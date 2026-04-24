@@ -57,6 +57,16 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     };
     let events = event_log.events;
     let event_log_diagnostics = event_log.diagnostics;
+    let coverage_env = crate::commands::coverage::run(Some(&slug));
+    let coverage_data = if coverage_env.ok {
+        coverage_env.data.clone()
+    } else {
+        json!({
+            "report_ready": false,
+            "report_ready_blockers": ["coverage preflight failed"],
+        })
+    };
+    let coverage_ready = coverage_data["report_ready"].as_bool().unwrap_or(false);
 
     let fact_check_required = cfg.tags.iter().any(|tag| tag == "fact-check");
     let mut accepted_sources = HashSet::new();
@@ -287,6 +297,20 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     if synth_completed == 0 {
         blockers.push("synthesize_completed 0 < 1".to_string());
     }
+    if !coverage_ready {
+        let summary = coverage_data["report_ready_blockers"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "coverage not ready".to_string());
+        blockers.push(format!("coverage: {summary}"));
+    }
     if event_log_diagnostics.malformed_lines > 0 {
         blockers.push(format!(
             "event_log_malformed_lines {} > 0",
@@ -337,6 +361,10 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
                 "malformed_lines": event_log_diagnostics.malformed_lines,
                 "unknown_events": event_log_diagnostics.unknown_events,
                 "parse_errors": event_log_diagnostics.parse_errors,
+            },
+            "coverage": {
+                "report_ready": coverage_data["report_ready"].clone(),
+                "report_ready_blockers": coverage_data["report_ready_blockers"].clone(),
             },
             "sources": {
                 "attempted": sources_attempted,
