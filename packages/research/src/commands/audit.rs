@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::output::Envelope;
 use crate::session::{
     active, config,
-    event::{
-        FactCheckOutcome, SessionEvent, ToolCallStatus, read_events_with_diagnostics,
-    },
+    event::{FactCheckOutcome, SessionEvent, ToolCallStatus, read_events_with_diagnostics},
     layout,
 };
 

@@ -123,7 +123,8 @@ fn source_accepted(url: &str) -> String {
 }
 
 fn make_coverage_ready(env: &Env, slug: &str, url: &str) {
-    let overview = "Overview body with enough grounded context to satisfy coverage readiness. ".repeat(5);
+    let overview =
+        "Overview body with enough grounded context to satisfy coverage readiness. ".repeat(5);
     fs::write(
         env.session_dir(slug).join("session.md"),
         format!(
