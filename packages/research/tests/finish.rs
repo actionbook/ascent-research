@@ -160,3 +160,14 @@ fn finish_keeps_inspection_commands_independent() {
     assert_eq!(env.research(&["--json", "synthesize", "independent"]).1, 0);
     assert_eq!(env.research(&["--json", "audit", "independent"]).1, 0);
 }
+
+#[test]
+fn skill_recommends_finish_for_mandatory_tail() {
+    let skill_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/ascent-research/SKILL.md");
+    let skill = fs::read_to_string(skill_path).unwrap();
+    assert!(skill.contains("ascent-research finish"));
+    assert!(skill.contains("coverage"));
+    assert!(skill.contains("synthesize"));
+    assert!(skill.contains("audit"));
+}

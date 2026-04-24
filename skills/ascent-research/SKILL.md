@@ -50,9 +50,15 @@ If provider smoke fails, **STOP** and surface the failing provider check. Do not
 
 **Data home:** all sessions, user preset overrides, wiki pages, and rendered reports live under `~/.actionbook/ascent-research/`. Override with `ACTIONBOOK_RESEARCH_HOME` for sandboxing. Upgraders from v0.2: the legacy `~/.actionbook/research/` tree is read-only — new writes land in the v0.3 canonical root.
 
-## Mandatory Tail (MANDATORY — do not stop at `loop`)
+## Mandatory Tail (MANDATORY — `finish` is preferred)
 
-`ascent-research loop` does **NOT** render `report.html`. Before you declare the task done, you MUST:
+`ascent-research loop` does **NOT** render `report.html`. Before you declare the task done, prefer the single completion protocol:
+
+```bash
+ascent-research finish <slug> [--bilingual] [--open]
+```
+
+`finish` runs `coverage -> synthesize -> audit` and returns non-zero unless all three stages pass. If you need to debug a stage, run the inspection commands individually:
 
 ```bash
 ascent-research coverage <slug>
@@ -62,23 +68,22 @@ ascent-research --json audit <slug>
 
 Rules:
 
-- Always run `coverage` after `loop` (or after manual `add` / `write` work) and inspect `report_ready`.
-- If `report_ready=true`, you MUST run `synthesize` before replying.
-- If the user asks for Chinese, bilingual output, or 中英文 output, you MUST run `synthesize <slug> --bilingual`; plain `synthesize` is English-only.
-- If `--bilingual` reports `bilingual_skipped`, do NOT claim Chinese output is complete. Fix the provider and rerun `synthesize <slug> --bilingual`.
-- After `synthesize`, run `audit` and inspect `audit_status`.
+- Always run `finish` after `loop` (or after manual `add` / `write` work) before replying.
+- If the user asks for Chinese, bilingual output, or 中英文 output, you MUST run `finish <slug> --bilingual`; plain `finish` renders English-only HTML.
+- If `finish` fails at `coverage`, do NOT claim the report is complete. Surface the blockers from `report_ready_blockers` and keep working or ask the user what to relax.
+- If `finish` fails at `synthesize`, do NOT claim `report.html` exists. Surface the synthesize error and keep working or ask the user what to relax.
+- If `finish` fails at `audit`, do NOT claim the session is验收-complete. Surface `audit_blockers` and keep working or ask the user what to relax.
+- If `--bilingual` reports `bilingual_skipped`, do NOT claim Chinese output is complete. Fix the provider and rerun `finish <slug> --bilingual`.
 - In the final reply, include the exact `<session>/report.html` path and `audit_status`.
-- If `report_ready=false`, do NOT claim the report is complete. Surface the blockers from `report_ready_blockers` and keep working or ask the user what to relax.
-- If `audit_status=incomplete`, do NOT claim the session is验收-complete. Surface `audit_blockers` and keep working or ask the user what to relax.
 
 Chinese/bilingual generation:
 
 ```bash
 # Default translator is Claude when built with provider-claude.
-ascent-research synthesize <slug> --bilingual --open
+ascent-research finish <slug> --bilingual --open
 
 # If Claude auth/API key is unavailable but the binary was built with provider-codex:
-ASR_BILINGUAL_PROVIDER=codex ascent-research synthesize <slug> --bilingual --open
+ASR_BILINGUAL_PROVIDER=codex ascent-research finish <slug> --bilingual --open
 ```
 
 `--bilingual` produces an English/中文 toggle in `report.html` by injecting `<p class="tr-zh">` siblings. Without `--bilingual`, the report intentionally has no Chinese paragraphs.
