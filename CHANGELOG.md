@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.1 — finish protocol
+
+Patch release focused on the harness completion contract.
+
+### Added
+
+- `ascent-research finish <slug>` — a stable completion command that runs
+  `coverage -> synthesize -> audit` and fails before rendering when the
+  session is not report-ready.
+- `audit` now embeds current coverage status and reports malformed,
+  unknown, and parse-error diagnostics from the append-only session
+  event stream.
+
+### Changed
+
+- The bundled `ascent-research` skill now treats `finish` as the
+  preferred Mandatory Tail. Manual `coverage`, `synthesize`, and `audit`
+  remain available as debug fallback commands.
+
 ## 0.3.0 — ascent-research rebrand
 
 Project renamed from `research-rs` to `ascent-research` to foreground

@@ -11,7 +11,7 @@
 ascent-research new "tokio internals 2026" --slug tokio --preset tech
 ascent-research add-local ~/tokio/tokio/src/runtime --glob '**/*.rs'
 ascent-research loop tokio --provider claude --iterations 12
-ascent-research synthesize tokio --open       # figure-rich HTML report
+ascent-research finish tokio --open           # coverage -> HTML -> audit
 # (next day)
 ascent-research resume tokio && ascent-research loop tokio --iterations 8
 ```
@@ -61,7 +61,7 @@ batch / CI / "I just want a report."
 ascent-research new "tokio internals" --slug tokio
 ascent-research add-local ~/tokio/tokio/src
 ascent-research loop tokio --provider claude --iterations 12
-ascent-research synthesize tokio --open
+ascent-research finish tokio --open
 ```
 
 ### Skill — driven from a Claude Code or Codex instance
@@ -197,7 +197,7 @@ ascent-research batch \
   https://github.com/HazyResearch/state-spaces \
   --concurrency 4
 ascent-research loop ssm --provider claude --iterations 10
-ascent-research synthesize ssm --bilingual --open
+ascent-research finish ssm --bilingual --open
 ```
 
 ### B. Deep-dive a library's source tree
@@ -207,7 +207,7 @@ ascent-research new "axum internals" --slug axum --preset tech
 ascent-research schema edit        # set your "what to emphasize"
 ascent-research add-local ~/axum/axum/src --glob '**/*.rs'
 ascent-research loop axum --provider claude --iterations 12
-ascent-research synthesize axum --open
+ascent-research finish axum --open
 ```
 
 ### C. Structure your Obsidian vault

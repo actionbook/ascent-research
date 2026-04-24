@@ -1,6 +1,6 @@
 [package]
 name = "ascent-research"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "ascent-research — an incremental research workflow CLI for AI agents. Every session resumes; knowledge accretes across runs. Mixes HTTP, browser, and local file ingest into a durable per-session wiki + figure-rich HTML report."
 license = "MIT"
