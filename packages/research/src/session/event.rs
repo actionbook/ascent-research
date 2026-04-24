@@ -317,6 +317,19 @@ pub enum SynthesizeStage {
     Render,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventLogDiagnostics {
+    pub malformed_lines: usize,
+    pub unknown_events: usize,
+    pub parse_errors: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EventLogRead {
+    pub events: Vec<SessionEvent>,
+    pub diagnostics: EventLogDiagnostics,
+}
+
 /// Read a session.jsonl file and return valid events. Malformed lines and
 /// unknown event types are **skipped with a stderr warning**; I/O errors
 /// against the file itself bubble up.
@@ -346,6 +359,39 @@ pub fn read_events(path: &Path) -> std::io::Result<Vec<SessionEvent>> {
         }
     }
     Ok(events)
+}
+
+/// Read a session.jsonl file and return valid events plus evidence-loss
+/// diagnostics. Unlike `read_events`, this is meant for audit surfaces that
+/// must report skipped lines instead of only warning to stderr.
+pub fn read_events_with_diagnostics(path: &Path) -> std::io::Result<EventLogRead> {
+    let f = std::fs::File::open(path)?;
+    let mut out = EventLogRead::default();
+    let reader = BufReader::new(f);
+    for line_res in reader.lines() {
+        let line = match line_res {
+            Ok(line) => line,
+            Err(_) => {
+                out.diagnostics.parse_errors += 1;
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<SessionEvent>(&line) {
+            Ok(ev) => out.events.push(ev),
+            Err(e) => {
+                out.diagnostics.parse_errors += 1;
+                if serde_json::from_str::<serde_json::Value>(&line).is_err() {
+                    out.diagnostics.malformed_lines += 1;
+                } else if e.to_string().contains("unknown variant") {
+                    out.diagnostics.unknown_events += 1;
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

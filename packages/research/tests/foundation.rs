@@ -40,6 +40,7 @@ fn help_lists_all_subcommands() {
         "route",
         "doctor",
         "audit",
+        "finish",
         "help",
     ] {
         assert!(
@@ -73,6 +74,16 @@ fn audit_help_lists_command() {
     assert!(
         stdout.contains("audit"),
         "subcommand `audit` missing from --help: {stdout}"
+    );
+}
+
+#[test]
+fn finish_help_lists_command() {
+    let (stdout, _, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("finish"),
+        "subcommand `finish` missing from --help: {stdout}"
     );
 }
 
