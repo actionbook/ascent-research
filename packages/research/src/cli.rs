@@ -153,6 +153,14 @@ pub enum Commands {
         #[arg(long)]
         bilingual: bool,
     },
+    /// Run the completion protocol: coverage -> synthesize -> audit.
+    Finish {
+        slug: String,
+        #[arg(long)]
+        open: bool,
+        #[arg(long)]
+        bilingual: bool,
+    },
     /// Render an editorial report from a session (rich-html and future formats).
     Report {
         slug: Option<String>,
@@ -424,6 +432,11 @@ fn dispatch(cmd: Commands) -> Envelope {
             open,
             bilingual,
         } => commands::synthesize::run(slug.as_deref(), no_render, open, bilingual),
+        Commands::Finish {
+            slug,
+            open,
+            bilingual,
+        } => commands::finish::run(&slug, open, bilingual),
         Commands::Report {
             slug,
             format,
