@@ -63,6 +63,23 @@ pub fn root_for_slug(slug: &str) -> PathBuf {
     canonical
 }
 
+/// Roots to inspect when DISCOVERING existing sessions.
+///
+/// Discovery differs from direct slug lookup: `research list` and
+/// `research series` do not know the slug ahead of time, so they must scan
+/// both the canonical v0.3 root and the legacy v0.2 root. Canonical is first
+/// so callers can de-duplicate by slug with canonical taking precedence.
+pub fn research_roots_for_discovery() -> Vec<PathBuf> {
+    let canonical = research_root();
+    let mut roots = vec![canonical.clone()];
+    if let Some(legacy) = legacy_research_root()
+        && legacy != canonical
+    {
+        roots.push(legacy);
+    }
+    roots
+}
+
 /// Absolute path to a specific session directory.
 ///
 /// Resolves through `root_for_slug` so existing sessions under the

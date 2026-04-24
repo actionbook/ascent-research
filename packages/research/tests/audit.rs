@@ -8,6 +8,54 @@ fn research_bin() -> String {
     env!("CARGO_BIN_EXE_ascent-research").to_string()
 }
 
+fn research_with_home(home: &Path, args: &[&str]) -> (Value, i32, String, String) {
+    let out = Command::new(research_bin())
+        .args(args)
+        .env("HOME", home)
+        .env_remove("ACTIONBOOK_RESEARCH_HOME")
+        .output()
+        .expect("spawn ascent-research");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let json_line = stdout.lines().find(|l| l.trim_start().starts_with('{'));
+    let v: Value = match json_line {
+        Some(l) => serde_json::from_str(l).unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+    (v, out.status.code().unwrap_or(-1), stderr, stdout)
+}
+
+fn write_legacy_audit_session(home: &Path, slug: &str) {
+    let dir = home.join(".actionbook").join("research").join(slug);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("session.toml"),
+        format!(
+            r#"slug = "{slug}"
+topic = "legacy audit topic"
+preset = "tech"
+created_at = "2026-04-20T10:00:00Z"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("session.md"), "# Research\n").unwrap();
+    fs::write(
+        dir.join("report.html"),
+        r#"<div class="lang-switch"><button data-mode="zh">中文</button></div><p class="tr-zh">中文。</p>"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("session.jsonl"),
+        format!(
+            r#"{{"event":"synthesize_started","timestamp":"2026-04-20T10:00:03Z","bilingual":true,"bilingual_provider":"codex"}}
+{{"event":"synthesize_completed","timestamp":"2026-04-20T10:00:04Z","report_json_path":"report.json","report_html_path":"{slug}/report.html","accepted_sources":0,"rejected_sources":0,"duration_ms":42}}
+"#
+        ),
+    )
+    .unwrap();
+}
+
 struct Env {
     _tmp: TempDir,
     home: String,
@@ -202,6 +250,25 @@ fn audit_reports_bilingual_html_status() {
     assert_eq!(
         v["data"]["synthesis"]["report_html"]["language_switch"],
         "enabled"
+    );
+}
+
+#[test]
+fn audit_resolves_slug_prefixed_report_path_in_legacy_root() {
+    let tmp = TempDir::new().unwrap();
+    let slug = "legacy-audit";
+    write_legacy_audit_session(tmp.path(), slug);
+
+    let (v, code, stderr, _) = research_with_home(tmp.path(), &["--json", "audit", slug]);
+    assert_eq!(code, 0, "stderr={stderr}; envelope={v}");
+    assert_eq!(v["data"]["synthesis"]["report_html"]["exists"], true);
+    assert_eq!(v["data"]["synthesis"]["report_html"]["zh_paragraphs"], 1);
+    assert!(
+        v["data"]["synthesis"]["report_html"]["path"]
+            .as_str()
+            .unwrap()
+            .contains(".actionbook/research/legacy-audit/report.html"),
+        "report path should resolve under legacy root: {v}"
     );
 }
 

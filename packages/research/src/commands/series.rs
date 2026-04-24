@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -20,59 +21,61 @@ struct Member {
 
 pub fn run(tag: &str, open: bool) -> Envelope {
     let root = layout::research_root();
-    if !root.exists() {
-        return Envelope::fail(CMD, "SESSION_NOT_FOUND", "research root empty");
-    }
-
-    let entries = match fs::read_dir(&root) {
-        Ok(e) => e,
-        Err(e) => return Envelope::fail(CMD, "IO_ERROR", format!("read root: {e}")),
-    };
 
     let mut members: Vec<Member> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut seen_slugs: HashSet<String> = HashSet::new();
 
-    for ent in entries.flatten() {
-        let path = ent.path();
-        if !path.is_dir() {
+    for discovery_root in layout::research_roots_for_discovery() {
+        if !discovery_root.exists() {
             continue;
         }
-        let slug = match path.file_name().and_then(|s| s.to_str()) {
-            Some(s) if !s.starts_with('.') => s.to_string(),
-            _ => continue,
+        let entries = match fs::read_dir(&discovery_root) {
+            Ok(e) => e,
+            Err(e) => return Envelope::fail(CMD, "IO_ERROR", format!("read root: {e}")),
         };
-        if !config::exists(&slug) {
-            continue;
+        for ent in entries.flatten() {
+            let path = ent.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let slug = match path.file_name().and_then(|s| s.to_str()) {
+                Some(s) if !s.starts_with('.') => s.to_string(),
+                _ => continue,
+            };
+            if !seen_slugs.insert(slug.clone()) || !config::exists(&slug) {
+                continue;
+            }
+            let cfg = match config::read(&slug) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !cfg.tags.iter().any(|t| t == tag) {
+                continue;
+            }
+
+            let html_path = layout::session_report_html(&slug);
+            let json_path = layout::session_report_json(&slug);
+
+            let (report_html, first_finding) = if html_path.exists() && json_path.exists() {
+                (
+                    Some(format!("{slug}/report.html")),
+                    extract_first_finding(&json_path),
+                )
+            } else {
+                warnings.push(format!("session '{slug}' not synthesized"));
+                (None, None)
+            };
+
+            members.push(Member {
+                slug: cfg.slug,
+                topic: cfg.topic,
+                preset: cfg.preset,
+                created_at: cfg.created_at,
+                report_html,
+                first_finding,
+            });
         }
-        let cfg = match config::read(&slug) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-        if !cfg.tags.iter().any(|t| t == tag) {
-            continue;
-        }
-
-        let html_path = layout::session_report_html(&slug);
-        let json_path = layout::session_report_json(&slug);
-
-        let (report_html, first_finding) = if html_path.exists() && json_path.exists() {
-            (
-                Some(format!("{slug}/report.html")),
-                extract_first_finding(&json_path),
-            )
-        } else {
-            warnings.push(format!("session '{slug}' not synthesized"));
-            (None, None)
-        };
-
-        members.push(Member {
-            slug: cfg.slug,
-            topic: cfg.topic,
-            preset: cfg.preset,
-            created_at: cfg.created_at,
-            report_html,
-            first_finding,
-        });
     }
 
     members.sort_by(|a, b| a.created_at.cmp(&b.created_at));
@@ -83,6 +86,9 @@ pub fn run(tag: &str, open: bool) -> Envelope {
     }
 
     let doc = build_index_doc(tag, &members);
+    if let Err(e) = fs::create_dir_all(&root) {
+        return Envelope::fail(CMD, "IO_ERROR", format!("create root: {e}"));
+    }
     let index_json_path = root.join(format!("series-{tag}.json"));
     let index_html_path = root.join(format!("series-{tag}.html"));
 

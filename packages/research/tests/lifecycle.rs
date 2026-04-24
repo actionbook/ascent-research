@@ -5,11 +5,48 @@
 //! CLI argument parsing and envelope rendering end-to-end.
 
 use serde_json::Value;
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
 fn binary() -> String {
     env!("CARGO_BIN_EXE_ascent-research").to_string()
+}
+
+fn run_with_home(home: &Path, args: &[&str]) -> (Value, i32, String) {
+    let out = Command::new(binary())
+        .args(args)
+        .env("HOME", home)
+        .env_remove("ACTIONBOOK_RESEARCH_HOME")
+        .output()
+        .expect("spawn research binary");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let json_line = stdout.lines().find(|l| l.trim_start().starts_with('{'));
+    let v: Value = match json_line {
+        Some(line) => serde_json::from_str(line).unwrap_or(Value::Null),
+        None => Value::Null,
+    };
+    (v, out.status.code().unwrap_or(-1), stderr)
+}
+
+fn write_legacy_session(home: &Path, slug: &str, topic: &str) {
+    let dir = home.join(".actionbook").join("research").join(slug);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("session.toml"),
+        format!(
+            r#"slug = "{slug}"
+topic = "{topic}"
+preset = "tech"
+created_at = "2026-04-20T10:00:00Z"
+"#
+        ),
+    )
+    .unwrap();
+    fs::write(dir.join("session.jsonl"), "").unwrap();
+    fs::write(dir.join("session.md"), "# Research\n").unwrap();
 }
 
 struct Env {
@@ -123,6 +160,20 @@ fn list_enumerates_sessions() {
     // If close via `--slug b` didn't take, b stays open; that's fine for the
     // count assertion above. Validate list returned both regardless.
     assert!(v_b["data"]["status"].is_string());
+}
+
+#[test]
+fn list_discovers_legacy_sessions_after_root_rename() {
+    let tmp = TempDir::new().unwrap();
+    write_legacy_session(tmp.path(), "legacy-only", "legacy topic");
+
+    let (v, code, stderr) = run_with_home(tmp.path(), &["list", "--json"]);
+    assert_eq!(code, 0, "stderr: {stderr}; envelope={v}");
+    let sessions = v["data"]["sessions"].as_array().unwrap();
+    assert!(
+        sessions.iter().any(|s| s["slug"] == "legacy-only"),
+        "legacy session missing from list: {sessions:?}"
+    );
 }
 
 #[test]

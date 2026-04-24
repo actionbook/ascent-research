@@ -553,7 +553,7 @@ fn resolve_report_path(slug: &str, path: &str) -> PathBuf {
         return p.to_path_buf();
     }
     if p.components().next().and_then(|c| c.as_os_str().to_str()) == Some(slug) {
-        layout::research_root().join(p)
+        layout::root_for_slug(slug).join(p)
     } else {
         layout::session_dir(slug).join(p)
     }
