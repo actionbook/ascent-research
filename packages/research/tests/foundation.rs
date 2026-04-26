@@ -33,6 +33,7 @@ fn help_lists_all_subcommands() {
         "status",
         "resume",
         "add",
+        "github-audit",
         "sources",
         "synthesize",
         "close",
@@ -74,6 +75,16 @@ fn audit_help_lists_command() {
     assert!(
         stdout.contains("audit"),
         "subcommand `audit` missing from --help: {stdout}"
+    );
+}
+
+#[test]
+fn github_audit_help_lists_command() {
+    let (stdout, _, code) = run(&["--help"]);
+    assert_eq!(code, 0);
+    assert!(
+        stdout.contains("github-audit"),
+        "subcommand `github-audit` missing from --help: {stdout}"
     );
 }
 

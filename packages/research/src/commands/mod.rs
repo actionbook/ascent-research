@@ -11,6 +11,7 @@ pub mod coverage;
 pub mod diff;
 pub mod doctor;
 pub mod finish;
+pub mod github_audit;
 pub mod list;
 #[cfg(feature = "autoresearch")]
 pub mod loop_cmd;

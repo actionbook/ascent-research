@@ -64,6 +64,17 @@ pub enum Commands {
     Status { slug: Option<String> },
     /// Inspect session.jsonl as a compact audit trail for hand calls, facts, and synthesis.
     Audit { slug: Option<String> },
+    /// Audit GitHub repository trust signals.
+    #[command(name = "github-audit")]
+    GithubAudit {
+        repo: String,
+        #[arg(long, default_value = "stargazers")]
+        depth: String,
+        #[arg(long, default_value_t = 200)]
+        sample: usize,
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// Set a session active again and print its session.md + recent events.
     Resume { slug: String },
     /// Route + fetch + smell-test a URL and attach to the active session.
@@ -375,6 +386,12 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
         Commands::Audit { slug } => commands::audit::run(slug.as_deref()),
+        Commands::GithubAudit {
+            repo,
+            depth,
+            sample,
+            out,
+        } => commands::github_audit::run(&repo, &depth, sample, out.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
         Commands::Add {
             url,
