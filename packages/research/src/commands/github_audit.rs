@@ -338,13 +338,8 @@ fn collect_repo_depth_with_auth(repo: &RepoInput, authenticated: bool) -> Envelo
         }
     }
 
-    let commit_activity_source = if commit_activity_availability == StatsAvailability::Available {
-        "github_native_stats"
-    } else if commit_activity_availability == StatsAvailability::Pending {
-        "stats_pending"
-    } else {
-        "unavailable"
-    };
+    let commit_activity_source = stats_source(commit_activity_availability);
+    let stats_contributors_source = stats_source(stats_contributors_availability);
     let (commit_activity_total_52w, commit_activity_weeks) =
         commit_activity_totals(&commit_activity_response);
 
@@ -402,6 +397,7 @@ fn collect_repo_depth_with_auth(repo: &RepoInput, authenticated: bool) -> Envelo
                     "issue_star_ratio": ratio(open_issues, stars),
                     "contributors_star_ratio": ratio(contributors_count as u64, stars),
                     "commit_activity_source": commit_activity_source,
+                    "stats_contributors_source": stats_contributors_source,
                     "commit_activity_total_52w": commit_activity_total_52w,
                     "commit_activity_weeks": commit_activity_weeks,
                     "commit_activity_per_1k_stars": per_1k_stars(commit_activity_total_52w, stars),
@@ -816,6 +812,15 @@ fn update_risk(data: &mut Map<String, Value>) {
     } else if !matches!(commit_activity_source, Some("github_native_stats")) {
         unknown_reasons.push("github_stats_unavailable".to_string());
     }
+    let stats_contributors_source = signals
+        .get("repo")
+        .and_then(|repo| repo.get("stats_contributors_source"))
+        .and_then(Value::as_str);
+    if matches!(stats_contributors_source, Some("stats_pending")) {
+        push_unique_reason(&mut unknown_reasons, "github_stats_pending");
+    } else if !matches!(stats_contributors_source, Some("github_native_stats")) {
+        push_unique_reason(&mut unknown_reasons, "github_stats_unavailable");
+    }
 
     add_share_risk(
         signals,
@@ -1085,6 +1090,12 @@ fn endpoint_for(data: &Map<String, Value>, suffix: &str) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn push_unique_reason(reasons: &mut Vec<String>, reason: &str) {
+    if !reasons.iter().any(|existing| existing == reason) {
+        reasons.push(reason.to_string());
+    }
+}
+
 fn share(count: usize, total: usize) -> f64 {
     if total == 0 {
         0.0
@@ -1297,6 +1308,14 @@ fn push_stats_record(
         StatsAvailability::Available => endpoints.push(endpoint_json(record)),
         StatsAvailability::Pending => unavailable.push(unavailable_json(record, "stats_pending")),
         StatsAvailability::Unavailable => unavailable.push(unavailable_json(record, "unavailable")),
+    }
+}
+
+fn stats_source(availability: StatsAvailability) -> &'static str {
+    match availability {
+        StatsAvailability::Available => "github_native_stats",
+        StatsAvailability::Pending => "stats_pending",
+        StatsAvailability::Unavailable => "unavailable",
     }
 }
 

@@ -549,6 +549,49 @@ exit 1
     .to_string()
 }
 
+fn fake_github_postagent_contributor_stats_unavailable() -> String {
+    r#"#!/bin/sh
+if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
+  printf '%s\n' "$*" >> "$POSTAGENT_REQUEST_LOG"
+fi
+
+case "$*" in
+  *"/repos/owner/repo/stats/commit_activity"*)
+    cat <<'JSON'
+[{"week":1711843200,"total":3},{"week":1712448000,"total":4},{"week":1713052800,"total":5}]
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo/stats/contributors"*)
+    printf '%s\n' '⚠ 403 — stats unavailable at https://api.github.com/repos/owner/repo/stats/contributors' >&2
+    printf '%s\n' 'HTTP 403 Forbidden' >&2
+    exit 0 ;;
+  *"/repos/owner/repo/traffic/"*)
+    printf '%s\n' '⚠ 403 — endpoint requires authorization at https://api.github.com/repos/owner/repo/traffic' >&2
+    printf '%s\n' 'HTTP 403 Forbidden' >&2
+    exit 0 ;;
+  *"/repos/owner/repo/contributors"*)
+    cat <<'JSON'
+[{"login":"owner"}]
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo/subscribers"*)
+    cat <<'JSON'
+[{"login":"watcher"}]
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo"*)
+    cat <<'JSON'
+{"name":"repo","full_name":"owner/repo","owner":{"login":"owner"},"html_url":"https://github.com/owner/repo","stargazers_count":10,"forks_count":2,"open_issues_count":1}
+JSON
+    exit 0 ;;
+esac
+
+printf '%s\n' "unexpected request: $*" >&2
+exit 1
+"#
+    .to_string()
+}
+
 fn fake_github_postagent_malformed_repo() -> String {
     r#"#!/bin/sh
 if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
@@ -1188,6 +1231,53 @@ fn github_audit_stats_unavailable_returns_unknown() {
         ),
         Some(500)
     );
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/stats/contributors"
+    ));
+    assert_eq!(
+        endpoint_status(
+            &v["data"]["github_api"]["unavailable"],
+            "/stats/contributors"
+        ),
+        Some(403)
+    );
+}
+
+#[test]
+fn github_audit_contributor_stats_unavailable_returns_unknown() {
+    let env = Env::new();
+    let postagent = env.write_fake_bin(
+        "postagent",
+        &fake_github_postagent_contributor_stats_unavailable(),
+    );
+
+    let (v, _, _, code) = env.research_with_postagent(
+        &["--json", "github-audit", "owner/repo", "--depth", "repo"],
+        Some(&postagent),
+    );
+
+    assert_eq!(code, 0, "{v:#?}");
+    assert_eq!(
+        v["data"]["signals"]["repo"]["commit_activity_source"],
+        "github_native_stats"
+    );
+    assert_eq!(
+        v["data"]["signals"]["repo"]["stats_contributors_source"],
+        "unavailable"
+    );
+    assert_eq!(v["data"]["risk"]["band"], "unknown");
+    assert!(
+        v["data"]["risk"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "github_stats_unavailable")
+    );
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["endpoints"],
+        "/stats/commit_activity"
+    ));
     assert!(array_contains_endpoint(
         &v["data"]["github_api"]["unavailable"],
         "/stats/contributors"
