@@ -49,12 +49,24 @@ impl Env {
         args: &[&str],
         postagent: Option<&PathBuf>,
     ) -> (Value, String, String, i32) {
+        self.research_with_postagent_env(args, postagent, &[])
+    }
+
+    fn research_with_postagent_env(
+        &self,
+        args: &[&str],
+        postagent: Option<&PathBuf>,
+        envs: &[(&str, &str)],
+    ) -> (Value, String, String, i32) {
         let mut cmd = Command::new(binary());
         cmd.args(args)
             .env("ACTIONBOOK_RESEARCH_HOME", &self.home)
             .env("POSTAGENT_REQUEST_LOG", &self.postagent_log);
         if let Some(postagent) = postagent {
             cmd.env("POSTAGENT_BIN", postagent);
+        }
+        for (key, value) in envs {
+            cmd.env(key, value);
         }
         let out = cmd.output().expect("spawn research binary");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -135,6 +147,76 @@ JSON
   *"/repos/owner/repo"*)
     cat <<'JSON'
 {"name":"repo","full_name":"owner/repo","owner":{"login":"owner"},"html_url":"https://github.com/owner/repo","stargazers_count":10,"forks_count":2,"open_issues_count":1,"watchers_count":10}
+JSON
+    exit 0 ;;
+esac
+
+printf '%s\n' "⚠ 404 — endpoint does not exist at $2" >&2
+printf '%s\n' 'HTTP 404 Not Found' >&2
+exit 0
+"#
+    .to_string()
+}
+
+fn fake_github_postagent_with_stargazers() -> String {
+    r#"#!/bin/sh
+if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
+  printf '%s\n' "$*" >> "$POSTAGENT_REQUEST_LOG"
+fi
+
+case "$*" in
+  *"/repos/dagster-io/dagster/stargazers?per_page=100&page=1"*)
+    cat <<'JSON'
+[{"starred_at":"2024-01-01T00:00:00Z","user":{"login":"u1"}},{"starred_at":"2024-02-01T00:00:00Z","user":{"login":"u2"}}]
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/stargazers?per_page=100&page=2"*)
+    cat <<'JSON'
+[{"login":"u3"}]
+JSON
+    exit 0 ;;
+  *"/users/u1"*)
+    cat <<'JSON'
+{"login":"u1","created_at":"2023-01-01T00:00:00Z","followers":0,"public_repos":0,"bio":""}
+JSON
+    exit 0 ;;
+  *"/users/u2"*)
+    cat <<'JSON'
+{"login":"u2","created_at":"2022-06-01T00:00:00Z","followers":1,"public_repos":2,"bio":null}
+JSON
+    exit 0 ;;
+  *"/users/u3"*)
+    cat <<'JSON'
+{"login":"u3","created_at":"2020-01-01T00:00:00Z","followers":5,"public_repos":10,"bio":"builder"}
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/traffic/"*)
+    printf '%s\n' '⚠ 403 — endpoint requires authorization at https://api.github.com/repos/dagster-io/dagster/traffic' >&2
+    printf '%s\n' 'HTTP 403 Forbidden' >&2
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/contributors"*)
+    cat <<'JSON'
+[{"login":"alice"},{"login":"bob"},{"login":"carol"}]
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/subscribers"*)
+    cat <<'JSON'
+[{"login":"watcher1"},{"login":"watcher2"}]
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/stats/commit_activity"*)
+    cat <<'JSON'
+[{"week":1711843200,"total":42}]
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster/stats/contributors"*)
+    cat <<'JSON'
+[{"total":100,"author":{"login":"alice"}}]
+JSON
+    exit 0 ;;
+  *"/repos/dagster-io/dagster"*)
+    cat <<'JSON'
+{"name":"dagster","full_name":"dagster-io/dagster","owner":{"login":"dagster-io"},"html_url":"https://github.com/dagster-io/dagster","stargazers_count":12345,"forks_count":2100,"open_issues_count":321,"watchers_count":12345}
 JSON
     exit 0 ;;
 esac
@@ -374,6 +456,77 @@ fn github_audit_accepts_github_url_input() {
     assert_eq!(code, 0, "{v:#?}");
     assert_eq!(v["data"]["repository"]["owner"], "dagster-io");
     assert_eq!(v["data"]["repository"]["repo"], "dagster");
+}
+
+#[test]
+fn github_audit_stargazers_requires_postagent_github_token() {
+    let env = Env::new();
+    let postagent = env.write_fake_bin("postagent", &fake_github_postagent());
+
+    let (v, stdout, stderr, code) = env.research_with_postagent_env(
+        &[
+            "--json",
+            "github-audit",
+            "dagster-io/dagster",
+            "--depth",
+            "stargazers",
+        ],
+        Some(&postagent),
+        &[("POSTAGENT_GITHUB_TOKEN", "secret-token")],
+    );
+
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "GITHUB_TOKEN_REQUIRED");
+    assert_eq!(v["error"]["details"]["depth"], "stargazers");
+    assert!(!stdout.contains("secret-token"));
+    assert!(!stderr.contains("secret-token"));
+}
+
+#[test]
+fn github_audit_default_depth_and_sample() {
+    let env = Env::new();
+    let postagent = env.write_fake_bin("postagent", &fake_github_postagent_with_stargazers());
+
+    let (v, stdout, stderr, code) = env.research_with_postagent_env(
+        &["--json", "github-audit", "dagster-io/dagster"],
+        Some(&postagent),
+        &[
+            ("POSTAGENT_GITHUB_TOKEN_AVAILABLE", "1"),
+            ("POSTAGENT_GITHUB_TOKEN", "secret-token"),
+        ],
+    );
+
+    assert_eq!(code, 0, "{v:#?}\nstdout={stdout}\nstderr={stderr}");
+    assert_eq!(v["data"]["depth"], "stargazers");
+    assert_eq!(v["data"]["sample"]["requested"], 200);
+    assert_eq!(v["data"]["sample"]["fetched"], 3);
+    assert!(v["data"]["sample"]["pages"].as_u64().unwrap() >= 1);
+    assert_eq!(v["data"]["github_api"]["authenticated"], true);
+    assert_eq!(v["data"]["signals"]["stargazers"]["accounts_sampled"], 3);
+    assert_eq!(
+        v["data"]["signals"]["stargazers"]["empty_bio_share"],
+        2.0 / 3.0
+    );
+    assert_eq!(
+        v["data"]["signals"]["stargazers"]["zero_public_repos_share"],
+        1.0 / 3.0
+    );
+    assert_eq!(
+        v["data"]["signals"]["stargazers"]["low_follower_share"],
+        2.0 / 3.0
+    );
+    assert_eq!(
+        v["data"]["signals"]["stargazers"]["zero_follower_share"],
+        1.0 / 3.0
+    );
+
+    let log = env.postagent_log();
+    assert!(log.contains("application/vnd.github.star+json"));
+    assert!(log.contains("application/vnd.github+json"));
+    assert!(log.contains("$POSTAGENT.GITHUB.TOKEN"));
+    assert!(!log.contains("secret-token"));
+    assert!(!stdout.contains("secret-token"));
+    assert!(!stderr.contains("secret-token"));
 }
 
 #[test]
