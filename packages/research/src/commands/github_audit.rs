@@ -1,3 +1,4 @@
+use serde_json::Value;
 use serde_json::json;
 
 use crate::fetch::postagent;
@@ -16,7 +17,7 @@ struct RepoInput {
 
 struct GithubResponse {
     endpoint: EndpointRecord,
-    value: Option<serde_json::Value>,
+    value: Option<Value>,
 }
 
 #[derive(Clone)]
@@ -68,24 +69,23 @@ pub fn run(repo: &str, depth: &str, sample: usize, out: Option<&str>) -> Envelop
 }
 
 fn parse_repo_input(input: &str) -> Result<RepoInput, Envelope> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
+    if input.is_empty() || input.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err(invalid_repo_input(input));
     }
 
-    let path = if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
-        if rest.contains('?') || rest.contains('#') {
-            return Err(invalid_repo_input(input));
-        }
-        rest.trim_matches('/')
-    } else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let path = if let Some(rest) = input.strip_prefix("https://github.com/") {
+        rest
+    } else if input.starts_with("http://") || input.starts_with("https://") {
         return Err(invalid_repo_input(input));
     } else {
-        trimmed.trim_matches('/')
+        input
     };
 
     let segments: Vec<&str> = path.split('/').collect();
     if segments.len() != 2 || segments.iter().any(|s| s.is_empty()) {
+        return Err(invalid_repo_input(input));
+    }
+    if !valid_owner_segment(segments[0]) || !valid_repo_segment(segments[1]) {
         return Err(invalid_repo_input(input));
     }
 
@@ -93,6 +93,20 @@ fn parse_repo_input(input: &str) -> Result<RepoInput, Envelope> {
         owner: segments[0].to_string(),
         repo: segments[1].to_string(),
     })
+}
+
+fn valid_owner_segment(owner: &str) -> bool {
+    !owner.is_empty()
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+fn valid_repo_segment(repo: &str) -> bool {
+    !repo.is_empty()
+        && repo
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 fn invalid_repo_input(input: &str) -> Envelope {
@@ -126,23 +140,51 @@ fn collect_repo_depth(repo: &RepoInput) -> Envelope {
         Ok(response) => response,
         Err(envelope) => return envelope,
     };
-    let commit_activity_response = match github_get_required(&commit_activity_path) {
+    let commit_activity_response = match github_get_stats(&commit_activity_path) {
         Ok(response) => response,
         Err(envelope) => return envelope,
     };
-    let stats_contributors_response = match github_get_required(&stats_contributors_path) {
+    let stats_contributors_response = match github_get_stats(&stats_contributors_path) {
         Ok(response) => response,
         Err(envelope) => return envelope,
     };
+
+    let repo_json = match validate_repo_response(&repo_response, repo) {
+        Ok(repo_json) => repo_json,
+        Err(envelope) => return envelope,
+    };
+    let contributors_count = match validate_array_response(&contributors_response, "contributors") {
+        Ok(count) => count,
+        Err(envelope) => return envelope,
+    };
+    let subscribers_count = match validate_array_response(&subscribers_response, "subscribers") {
+        Ok(count) => count,
+        Err(envelope) => return envelope,
+    };
+    let commit_activity_available = match validate_stats_response(&commit_activity_response) {
+        Ok(available) => available,
+        Err(envelope) => return envelope,
+    };
+    if let Err(envelope) = validate_stats_response(&stats_contributors_response) {
+        return envelope;
+    }
 
     let mut endpoints = vec![
         endpoint_json(&repo_response.endpoint),
         endpoint_json(&contributors_response.endpoint),
         endpoint_json(&subscribers_response.endpoint),
-        endpoint_json(&commit_activity_response.endpoint),
-        endpoint_json(&stats_contributors_response.endpoint),
     ];
     let mut unavailable = Vec::new();
+    push_stats_record(
+        &mut endpoints,
+        &mut unavailable,
+        &commit_activity_response.endpoint,
+    );
+    push_stats_record(
+        &mut endpoints,
+        &mut unavailable,
+        &stats_contributors_response.endpoint,
+    );
     for path in [
         format!("{repo_path}/traffic/views"),
         format!("{repo_path}/traffic/clones"),
@@ -159,31 +201,17 @@ fn collect_repo_depth(repo: &RepoInput) -> Envelope {
         }
     }
 
-    let repo_json = repo_response.value.unwrap_or_else(|| json!({}));
-    let contributors_count = array_len(contributors_response.value.as_ref());
-    let subscribers_count = array_len(subscribers_response.value.as_ref());
-    let commit_activity_source = if commit_activity_response
-        .value
-        .as_ref()
-        .is_some_and(|v| v.is_array())
-    {
+    let commit_activity_source = if commit_activity_available {
         "github_native_stats"
+    } else if commit_activity_response.endpoint.status == Some(202) {
+        "stats_pending"
     } else {
         "unavailable"
     };
 
-    let stars = repo_json
-        .get("stargazers_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let forks = repo_json
-        .get("forks_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let open_issues = repo_json
-        .get("open_issues_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let stars = numeric_field(&repo_json, "stargazers_count").unwrap_or(0);
+    let forks = numeric_field(&repo_json, "forks_count").unwrap_or(0);
+    let open_issues = numeric_field(&repo_json, "open_issues_count").unwrap_or(0);
     let html_url = repo_json
         .get("html_url")
         .and_then(|v| v.as_str())
@@ -265,12 +293,30 @@ fn github_get_required(path: &str) -> Result<GithubResponse, Envelope> {
     Ok(response)
 }
 
+fn github_get_stats(path: &str) -> Result<GithubResponse, Envelope> {
+    let response = github_get(path).map_err(|message| {
+        Envelope::fail(CMD, "FETCH_FAILED", message).with_details(json!({ "path": path }))
+    })?;
+
+    if matches!(response.endpoint.status, Some(200) | Some(202)) {
+        Ok(response)
+    } else {
+        Err(
+            Envelope::fail(CMD, "GITHUB_API_ERROR", "GitHub stats API request failed")
+                .with_details(json!({
+                    "path": response.endpoint.path,
+                    "status": response.endpoint.status,
+                })),
+        )
+    }
+}
+
 fn github_get_optional(path: &str) -> Result<GithubResponse, EndpointRecord> {
     match github_get(path) {
-        Ok(response) if matches!(response.endpoint.status, Some(403) | Some(404)) => {
-            Err(response.endpoint)
+        Ok(response) if response.endpoint.status == Some(200) && response.value.is_some() => {
+            Ok(response)
         }
-        Ok(response) => Ok(response),
+        Ok(response) => Err(response.endpoint),
         Err(_) => Err(EndpointRecord {
             path: path.to_string(),
             status: None,
@@ -289,11 +335,8 @@ fn github_get(path: &str) -> Result<GithubResponse, String> {
     ];
     let raw = postagent::run_args(&args, FETCH_TIMEOUT_MS)?;
     let parsed = postagent::parse(&raw).ok_or_else(|| "parse postagent output".to_string())?;
-    let value = if parsed.status == Some(200) {
-        Some(
-            serde_json::from_slice(&raw.raw_stdout)
-                .map_err(|e| format!("parse GitHub JSON for {path}: {e}"))?,
-        )
+    let value = if parsed.status == Some(200) && parsed.body_non_empty {
+        serde_json::from_slice(&raw.raw_stdout).ok()
     } else {
         None
     };
@@ -308,7 +351,7 @@ fn github_get(path: &str) -> Result<GithubResponse, String> {
     })
 }
 
-fn endpoint_json(record: &EndpointRecord) -> serde_json::Value {
+fn endpoint_json(record: &EndpointRecord) -> Value {
     json!({
         "endpoint": record.path.clone(),
         "path": record.path.clone(),
@@ -317,6 +360,113 @@ fn endpoint_json(record: &EndpointRecord) -> serde_json::Value {
     })
 }
 
-fn array_len(value: Option<&serde_json::Value>) -> usize {
-    value.and_then(|v| v.as_array()).map_or(0, Vec::len)
+fn unavailable_json(record: &EndpointRecord, reason: &str) -> Value {
+    json!({
+        "endpoint": record.path.clone(),
+        "path": record.path.clone(),
+        "status": record.status,
+        "reason": reason,
+    })
+}
+
+fn push_stats_record(
+    endpoints: &mut Vec<Value>,
+    unavailable: &mut Vec<Value>,
+    record: &EndpointRecord,
+) {
+    if record.status == Some(200) {
+        endpoints.push(endpoint_json(record));
+    } else {
+        let reason = if record.status == Some(202) {
+            "stats_pending"
+        } else {
+            "unavailable"
+        };
+        unavailable.push(unavailable_json(record, reason));
+    }
+}
+
+fn validate_repo_response(response: &GithubResponse, repo: &RepoInput) -> Result<Value, Envelope> {
+    let Some(value) = response.value.as_ref() else {
+        return Err(invalid_github_shape(
+            &response.endpoint,
+            "repository response must be a JSON object",
+        ));
+    };
+    if !value.is_object() {
+        return Err(invalid_github_shape(
+            &response.endpoint,
+            "repository response must be a JSON object",
+        ));
+    }
+    for field in ["stargazers_count", "forks_count", "open_issues_count"] {
+        if numeric_field(value, field).is_none() {
+            return Err(invalid_github_shape(
+                &response.endpoint,
+                format!("repository field {field} must be numeric"),
+            ));
+        }
+    }
+
+    let owner = value
+        .get("owner")
+        .and_then(|v| v.get("login"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(&repo.owner);
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&repo.repo);
+    if owner != repo.owner || name != repo.repo {
+        return Err(invalid_github_shape(
+            &response.endpoint,
+            "repository identity did not match requested owner/repo",
+        ));
+    }
+
+    Ok(value.clone())
+}
+
+fn validate_array_response(response: &GithubResponse, name: &str) -> Result<usize, Envelope> {
+    match response.value.as_ref().and_then(|v| v.as_array()) {
+        Some(items) => Ok(items.len()),
+        None => Err(invalid_github_shape(
+            &response.endpoint,
+            format!("{name} response must be a JSON array"),
+        )),
+    }
+}
+
+fn validate_stats_response(response: &GithubResponse) -> Result<bool, Envelope> {
+    match response.endpoint.status {
+        Some(200) => {
+            if response.value.as_ref().is_some_and(|v| v.is_array()) {
+                Ok(true)
+            } else {
+                Err(invalid_github_shape(
+                    &response.endpoint,
+                    "stats response must be a JSON array",
+                ))
+            }
+        }
+        Some(202) => Ok(false),
+        _ => Err(
+            Envelope::fail(CMD, "GITHUB_API_ERROR", "GitHub stats API request failed")
+                .with_details(json!({
+                    "path": response.endpoint.path,
+                    "status": response.endpoint.status,
+                })),
+        ),
+    }
+}
+
+fn invalid_github_shape(record: &EndpointRecord, message: impl Into<String>) -> Envelope {
+    Envelope::fail(CMD, "GITHUB_API_ERROR", message).with_details(json!({
+        "path": record.path,
+        "status": record.status,
+    }))
+}
+
+fn numeric_field(value: &Value, field: &str) -> Option<u64> {
+    value.get(field).and_then(|v| v.as_u64())
 }

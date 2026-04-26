@@ -146,6 +146,100 @@ exit 0
     .to_string()
 }
 
+fn fake_github_postagent_stats_202_and_traffic_429() -> String {
+    r#"#!/bin/sh
+if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
+  printf '%s\n' "$*" >> "$POSTAGENT_REQUEST_LOG"
+fi
+
+case "$*" in
+  *"/repos/owner/repo/stats/commit_activity"*)
+    printf '%s\n' '⚠ 202 — stats are being generated at https://api.github.com/repos/owner/repo/stats/commit_activity' >&2
+    printf '%s\n' 'HTTP 202 Accepted' >&2
+    exit 0 ;;
+  *"/repos/owner/repo/stats/contributors"*)
+    printf '%s\n' '⚠ 202 — stats are being generated at https://api.github.com/repos/owner/repo/stats/contributors' >&2
+    printf '%s\n' 'HTTP 202 Accepted' >&2
+    exit 0 ;;
+  *"/repos/owner/repo/traffic/views"*)
+    printf '%s\n' '⚠ 429 — rate limit exceeded at https://api.github.com/repos/owner/repo/traffic/views' >&2
+    printf '%s\n' 'HTTP 429 Too Many Requests' >&2
+    exit 0 ;;
+  *"/repos/owner/repo/traffic/clones"*)
+    cat <<'JSON'
+{"count":10,"uniques":5,"clones":[]}
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo/traffic/popular/referrers"*)
+    printf '%s\n' 'not-json'
+    exit 0 ;;
+  *"/repos/owner/repo/contributors"*)
+    cat <<'JSON'
+[{"login":"owner"}]
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo/subscribers"*)
+    cat <<'JSON'
+[{"login":"watcher"}]
+JSON
+    exit 0 ;;
+  *"/repos/owner/repo"*)
+    cat <<'JSON'
+{"name":"repo","full_name":"owner/repo","owner":{"login":"owner"},"html_url":"https://github.com/owner/repo","stargazers_count":10,"forks_count":2,"open_issues_count":1}
+JSON
+    exit 0 ;;
+esac
+
+printf '%s\n' "⚠ 404 — endpoint does not exist at $2" >&2
+printf '%s\n' 'HTTP 404 Not Found' >&2
+exit 0
+"#
+    .to_string()
+}
+
+fn fake_github_postagent_malformed_repo() -> String {
+    r#"#!/bin/sh
+if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
+  printf '%s\n' "$*" >> "$POSTAGENT_REQUEST_LOG"
+fi
+
+case "$*" in
+  *"/repos/owner/repo"*)
+    cat <<'JSON'
+{"name":"repo","full_name":"owner/repo","owner":{"login":"owner"},"html_url":"https://github.com/owner/repo","stargazers_count":"many","forks_count":2}
+JSON
+    exit 0 ;;
+esac
+
+cat <<'JSON'
+[]
+JSON
+exit 0
+"#
+    .to_string()
+}
+
+fn array_contains_endpoint(items: &Value, suffix: &str) -> bool {
+    items.as_array().unwrap().iter().any(|item| {
+        item["endpoint"]
+            .as_str()
+            .or_else(|| item["path"].as_str())
+            .is_some_and(|endpoint| endpoint.ends_with(suffix))
+    })
+}
+
+fn endpoint_status(items: &Value, suffix: &str) -> Option<i64> {
+    items.as_array().unwrap().iter().find_map(|item| {
+        let endpoint = item["endpoint"]
+            .as_str()
+            .or_else(|| item["path"].as_str())?;
+        endpoint
+            .ends_with(suffix)
+            .then(|| item["status"].as_i64())
+            .flatten()
+    })
+}
+
 #[test]
 fn github_audit_rejects_invalid_depth_and_sample() {
     let env = Env::new();
@@ -185,6 +279,25 @@ fn github_audit_repo_depth_anonymous_success() {
         "https://github.com/dagster-io/dagster"
     );
     assert_eq!(v["data"]["repository"]["stars"], 12345);
+    assert_eq!(v["data"]["signals"]["repo"]["contributors_count"], 3);
+    assert_eq!(v["data"]["signals"]["repo"]["subscribers_count"], 2);
+    assert_eq!(
+        v["data"]["signals"]["repo"]["commit_activity_source"],
+        "github_native_stats"
+    );
+    assert_eq!(v["data"]["signals"]["repo"]["watchers_count_ignored"], true);
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/traffic/views"
+    ));
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/traffic/clones"
+    ));
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/traffic/popular/referrers"
+    ));
     let score = v["data"]["risk"]["score"].as_i64().unwrap();
     assert!((0..=100).contains(&score));
     assert!(!stdout.contains("Authorization"));
@@ -216,4 +329,98 @@ fn github_audit_accepts_github_url_input() {
     assert_eq!(code, 0, "{v:#?}");
     assert_eq!(v["data"]["repository"]["owner"], "dagster-io");
     assert_eq!(v["data"]["repository"]["repo"], "dagster");
+}
+
+#[test]
+fn github_audit_rejects_invalid_repo_inputs() {
+    let env = Env::new();
+    let invalid = [
+        "",
+        " ",
+        "owner",
+        "owner/repo/extra",
+        "/owner/repo",
+        "owner/repo/",
+        "owner /repo",
+        "owner/re po",
+        "owner/repo?x=1",
+        "owner/repo#frag",
+        "owner-/repo",
+        "own_er/repo",
+        "owner/.. /repo",
+        "https://github.com/owner/repo/extra",
+        "https://github.com/owner/repo?x=1",
+        "https://github.com/-owner/repo",
+    ];
+
+    for repo in invalid {
+        let (v, _, _, code) = env.research(&["--json", "github-audit", repo, "--depth", "repo"]);
+        assert_ne!(code, 0, "input should fail: {repo:?}");
+        assert_eq!(
+            v["error"]["code"], "INVALID_ARGUMENT",
+            "input should be INVALID_ARGUMENT: {repo:?}"
+        );
+    }
+
+    let (v, _, _, code) = env.research(&["--json", "github-audit", "--", "-owner/repo"]);
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "INVALID_ARGUMENT");
+}
+
+#[test]
+fn github_audit_treats_stats_202_and_traffic_429_as_unavailable() {
+    let env = Env::new();
+    let postagent = env.write_fake_bin(
+        "postagent",
+        &fake_github_postagent_stats_202_and_traffic_429(),
+    );
+
+    let (v, _, _, code) = env.research_with_postagent(
+        &["--json", "github-audit", "owner/repo", "--depth", "repo"],
+        Some(&postagent),
+    );
+
+    assert_eq!(code, 0, "{v:#?}");
+    assert_eq!(
+        v["data"]["signals"]["repo"]["commit_activity_source"],
+        "stats_pending"
+    );
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/stats/commit_activity"
+    ));
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/stats/contributors"
+    ));
+    assert_eq!(
+        endpoint_status(&v["data"]["github_api"]["unavailable"], "/traffic/views"),
+        Some(429)
+    );
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["unavailable"],
+        "/traffic/popular/referrers"
+    ));
+    assert!(array_contains_endpoint(
+        &v["data"]["github_api"]["endpoints"],
+        "/traffic/clones"
+    ));
+    assert!(!array_contains_endpoint(
+        &v["data"]["github_api"]["endpoints"],
+        "/traffic/views"
+    ));
+}
+
+#[test]
+fn github_audit_malformed_repo_json_fails() {
+    let env = Env::new();
+    let postagent = env.write_fake_bin("postagent", &fake_github_postagent_malformed_repo());
+
+    let (v, _, _, code) = env.research_with_postagent(
+        &["--json", "github-audit", "owner/repo", "--depth", "repo"],
+        Some(&postagent),
+    );
+
+    assert_ne!(code, 0);
+    assert_eq!(v["error"]["code"], "GITHUB_API_ERROR");
 }
