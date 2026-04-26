@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
-use std::env;
 
 use crate::fetch::postagent;
 use crate::output::{Envelope, not_implemented};
@@ -24,6 +23,11 @@ struct RepoInput {
 struct GithubResponse {
     endpoint: EndpointRecord,
     value: Option<Value>,
+}
+
+enum GithubFetchError {
+    CredentialRequired,
+    Other(String),
 }
 
 struct StargazerSample {
@@ -91,17 +95,11 @@ pub fn run(repo: &str, depth: &str, sample: usize, out: Option<&str>) -> Envelop
         Err(envelope) => return envelope,
     };
 
-    if matches!(depth, "stargazers" | "timeline") && !postagent_github_token_available() {
-        return Envelope::fail(
-            CMD,
-            "GITHUB_TOKEN_REQUIRED",
-            "GitHub credential is required for this depth",
-        )
-        .with_details(json!({ "depth": depth }));
-    }
-
     if depth == "timeline" {
         let _ = out;
+        if let Err(envelope) = probe_authenticated_github(&repo_input, depth) {
+            return envelope;
+        }
         return not_implemented(CMD);
     }
 
@@ -111,12 +109,6 @@ pub fn run(repo: &str, depth: &str, sample: usize, out: Option<&str>) -> Envelop
     } else {
         collect_repo_depth(&repo_input)
     }
-}
-
-fn postagent_github_token_available() -> bool {
-    env::var("POSTAGENT_GITHUB_TOKEN_AVAILABLE")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
 }
 
 fn parse_repo_input(input: &str) -> Result<RepoInput, Envelope> {
@@ -337,12 +329,12 @@ fn collect_repo_depth_with_auth(repo: &RepoInput, authenticated: bool) -> Envelo
 fn collect_stargazers_depth(repo: &RepoInput, sample: usize) -> Envelope {
     let mut envelope = collect_repo_depth_with_auth(repo, true);
     if !envelope.ok {
-        return envelope;
+        return with_auth_depth(envelope, "stargazers");
     }
 
     let stargazers = match collect_stargazers(repo, sample) {
         Ok(stargazers) => stargazers,
-        Err(envelope) => return envelope,
+        Err(envelope) => return with_auth_depth(envelope, "stargazers"),
     };
     let stargazer_signals = stargazer_signals(&stargazers.profiles);
     let starred_at_available_count = stargazers
@@ -382,6 +374,15 @@ fn collect_stargazers_depth(repo: &RepoInput, sample: usize) -> Envelope {
     }
 
     envelope
+}
+
+fn probe_authenticated_github(repo: &RepoInput, depth: &str) -> Result<(), Envelope> {
+    let path = format!("/repos/{}/{}", repo.owner, repo.repo);
+    match github_get(&path, true, GITHUB_JSON_ACCEPT) {
+        Ok(_) => Ok(()),
+        Err(GithubFetchError::CredentialRequired) => Err(github_token_required(depth)),
+        Err(GithubFetchError::Other(_)) => Ok(()),
+    }
 }
 
 fn collect_stargazers(repo: &RepoInput, sample: usize) -> Result<StargazerCollection, Envelope> {
@@ -569,8 +570,11 @@ fn github_get_required(
     authenticated: bool,
     accept: &str,
 ) -> Result<GithubResponse, Envelope> {
-    let response = github_get(path, authenticated, accept).map_err(|message| {
-        Envelope::fail(CMD, "FETCH_FAILED", message).with_details(json!({ "path": path }))
+    let response = github_get(path, authenticated, accept).map_err(|err| match err {
+        GithubFetchError::CredentialRequired => github_token_required_without_depth(),
+        GithubFetchError::Other(message) => {
+            Envelope::fail(CMD, "FETCH_FAILED", message).with_details(json!({ "path": path }))
+        }
     })?;
 
     if response.endpoint.status != Some(200) {
@@ -602,8 +606,11 @@ fn github_get_stats(
     authenticated: bool,
     accept: &str,
 ) -> Result<GithubResponse, Envelope> {
-    let response = github_get(path, authenticated, accept).map_err(|message| {
-        Envelope::fail(CMD, "FETCH_FAILED", message).with_details(json!({ "path": path }))
+    let response = github_get(path, authenticated, accept).map_err(|err| match err {
+        GithubFetchError::CredentialRequired => github_token_required_without_depth(),
+        GithubFetchError::Other(message) => {
+            Envelope::fail(CMD, "FETCH_FAILED", message).with_details(json!({ "path": path }))
+        }
     })?;
 
     if matches!(response.endpoint.status, Some(200) | Some(202)) {
@@ -637,7 +644,11 @@ fn github_get_optional(
     }
 }
 
-fn github_get(path: &str, authenticated: bool, accept: &str) -> Result<GithubResponse, String> {
+fn github_get(
+    path: &str,
+    authenticated: bool,
+    accept: &str,
+) -> Result<GithubResponse, GithubFetchError> {
     let url = format!("{GITHUB_API}{path}");
     let mut args = vec![
         "send".to_string(),
@@ -649,8 +660,13 @@ fn github_get(path: &str, authenticated: bool, accept: &str) -> Result<GithubRes
         args.push("-H".to_string());
         args.push(POSTAGENT_GITHUB_AUTH_HEADER.to_string());
     }
-    let raw = postagent::run_args(&args, FETCH_TIMEOUT_MS)?;
-    let parsed = postagent::parse(&raw).ok_or_else(|| "parse postagent output".to_string())?;
+    let raw = postagent::run_args(&args, FETCH_TIMEOUT_MS).map_err(GithubFetchError::Other)?;
+    if authenticated && postagent_github_credential_error(&raw.raw_stderr) {
+        return Err(GithubFetchError::CredentialRequired);
+    }
+
+    let parsed = postagent::parse(&raw)
+        .ok_or_else(|| GithubFetchError::Other("parse postagent output".to_string()))?;
     let value = if parsed.status == Some(200) && parsed.body_non_empty {
         serde_json::from_slice(&raw.raw_stdout).ok()
     } else {
@@ -665,6 +681,53 @@ fn github_get(path: &str, authenticated: bool, accept: &str) -> Result<GithubRes
         },
         value,
     })
+}
+
+fn postagent_github_credential_error(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    let mentions_github_placeholder =
+        stderr.contains("postagent.github.token") || stderr.contains("github.token");
+    let mentions_auth_config = stderr.contains("credential")
+        || stderr.contains("token")
+        || stderr.contains("placeholder")
+        || stderr.contains("auth config")
+        || stderr.contains("authorization");
+
+    mentions_github_placeholder && mentions_auth_config
+}
+
+fn github_token_required(depth: &str) -> Envelope {
+    Envelope::fail(
+        CMD,
+        "GITHUB_TOKEN_REQUIRED",
+        "GitHub credential is required for this depth",
+    )
+    .with_details(json!({
+        "depth": depth,
+        "sub_code": "GITHUB_TOKEN_REQUIRED",
+    }))
+}
+
+fn github_token_required_without_depth() -> Envelope {
+    Envelope::fail(
+        CMD,
+        "GITHUB_TOKEN_REQUIRED",
+        "GitHub credential is required for this depth",
+    )
+    .with_details(json!({
+        "sub_code": "GITHUB_TOKEN_REQUIRED",
+    }))
+}
+
+fn with_auth_depth(mut envelope: Envelope, depth: &str) -> Envelope {
+    if envelope
+        .error
+        .as_ref()
+        .is_some_and(|err| err.code == "GITHUB_TOKEN_REQUIRED")
+    {
+        envelope = github_token_required(depth);
+    }
+    envelope
 }
 
 fn endpoint_json(record: &EndpointRecord) -> Value {

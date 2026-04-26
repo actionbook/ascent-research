@@ -228,6 +228,24 @@ exit 0
     .to_string()
 }
 
+fn fake_github_postagent_missing_github_credential() -> String {
+    r#"#!/bin/sh
+if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
+  printf '%s\n' "$*" >> "$POSTAGENT_REQUEST_LOG"
+fi
+
+case "$*" in
+  *'$POSTAGENT.GITHUB.TOKEN'*)
+    printf '%s\n' 'missing credential placeholder: $POSTAGENT.GITHUB.TOKEN' >&2
+    exit 1 ;;
+esac
+
+printf '%s\n' "unexpected anonymous request: $*" >&2
+exit 1
+"#
+    .to_string()
+}
+
 fn fake_github_postagent_stats_202_and_traffic_429() -> String {
     r#"#!/bin/sh
 if [ -n "$POSTAGENT_REQUEST_LOG" ]; then
@@ -461,7 +479,10 @@ fn github_audit_accepts_github_url_input() {
 #[test]
 fn github_audit_stargazers_requires_postagent_github_token() {
     let env = Env::new();
-    let postagent = env.write_fake_bin("postagent", &fake_github_postagent());
+    let postagent = env.write_fake_bin(
+        "postagent",
+        &fake_github_postagent_missing_github_credential(),
+    );
 
     let (v, stdout, stderr, code) = env.research_with_postagent_env(
         &[
@@ -478,8 +499,12 @@ fn github_audit_stargazers_requires_postagent_github_token() {
     assert_ne!(code, 0);
     assert_eq!(v["error"]["code"], "GITHUB_TOKEN_REQUIRED");
     assert_eq!(v["error"]["details"]["depth"], "stargazers");
+    assert_eq!(v["error"]["details"]["sub_code"], "GITHUB_TOKEN_REQUIRED");
+    let log = env.postagent_log();
+    assert!(log.contains("$POSTAGENT.GITHUB.TOKEN"));
     assert!(!stdout.contains("secret-token"));
     assert!(!stderr.contains("secret-token"));
+    assert!(!log.contains("secret-token"));
 }
 
 #[test]
@@ -490,10 +515,7 @@ fn github_audit_default_depth_and_sample() {
     let (v, stdout, stderr, code) = env.research_with_postagent_env(
         &["--json", "github-audit", "dagster-io/dagster"],
         Some(&postagent),
-        &[
-            ("POSTAGENT_GITHUB_TOKEN_AVAILABLE", "1"),
-            ("POSTAGENT_GITHUB_TOKEN", "secret-token"),
-        ],
+        &[("POSTAGENT_GITHUB_TOKEN", "secret-token")],
     );
 
     assert_eq!(code, 0, "{v:#?}\nstdout={stdout}\nstderr={stderr}");
