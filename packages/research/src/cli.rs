@@ -64,6 +64,19 @@ pub enum Commands {
     Status { slug: Option<String> },
     /// Inspect session.jsonl as a compact audit trail for hand calls, facts, and synthesis.
     Audit { slug: Option<String> },
+    /// Audit GitHub repository trust signals.
+    #[command(name = "github-audit")]
+    GithubAudit {
+        repo: String,
+        #[arg(long, default_value = "stargazers")]
+        depth: String,
+        #[arg(long, default_value_t = 200)]
+        sample: usize,
+        #[arg(long)]
+        out: Option<String>,
+        #[arg(long)]
+        html: Option<String>,
+    },
     /// Set a session active again and print its session.md + recent events.
     Resume { slug: String },
     /// Route + fetch + smell-test a URL and attach to the active session.
@@ -326,7 +339,7 @@ pub fn run() -> ExitCode {
     let cli = Cli::parse();
     let json = cli.json;
 
-    let envelope = match cli.command {
+    let (envelope, github_audit_plain) = match cli.command {
         None => {
             // bare `research` with no subcommand: print help via clap and exit 0
             use clap::CommandFactory;
@@ -342,10 +355,17 @@ pub fn run() -> ExitCode {
             println!();
             return ExitCode::SUCCESS;
         }
-        Some(cmd) => dispatch(cmd),
+        Some(cmd) => {
+            let github_audit_plain = matches!(cmd, Commands::GithubAudit { .. });
+            (dispatch(cmd), github_audit_plain)
+        }
     };
 
-    envelope.render(json);
+    if github_audit_plain && !json {
+        commands::github_audit::render_plain_summary(&envelope);
+    } else {
+        envelope.render(json);
+    }
     if envelope.ok {
         ExitCode::SUCCESS
     } else {
@@ -375,6 +395,13 @@ fn dispatch(cmd: Commands) -> Envelope {
         Commands::Show { slug } => commands::show::run(&slug),
         Commands::Status { slug } => commands::status::run(slug.as_deref()),
         Commands::Audit { slug } => commands::audit::run(slug.as_deref()),
+        Commands::GithubAudit {
+            repo,
+            depth,
+            sample,
+            out,
+            html,
+        } => commands::github_audit::run(&repo, &depth, sample, out.as_deref(), html.as_deref()),
         Commands::Resume { slug } => commands::resume::run(&slug),
         Commands::Add {
             url,

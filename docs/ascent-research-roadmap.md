@@ -6,6 +6,25 @@ skill prose and into stable CLI contracts: session is the durable event log,
 harness is the replaceable orchestration layer, and tools are separately
 auditable hands.
 
+## Current Slice: GitHub Trust Audit
+
+Goal: turn GitHub star-trust analysis into a deterministic evidence artifact
+that can be ingested by the normal research loop.
+
+- Add `ascent-research github-audit <owner>/<repo>` with `repo`,
+  `stargazers`, and `timeline` depths.
+- Use GitHub-native API evidence first: repo counters, subscribers,
+  contributors, stats endpoints, sampled stargazers, and `starred_at` burst
+  windows.
+- Output only risk score, band, confidence, reasons, and evidence. Do not
+  claim a repo is definitively fake or real.
+- Keep token handling in postagent via `$POSTAGENT.GITHUB.TOKEN`; no raw
+  credentials in stdout, stderr, audit JSON, or session artifacts.
+- Add a `github-trust` preset and skill playbook so the deterministic
+  `audit.json` becomes the first source for follow-up reports.
+
+Spec: `specs/research-github-trust-audit.spec.md`
+
 ## Priority 0: Completion Protocol In The CLI
 
 Goal: make "the research is complete" a deterministic CLI protocol instead of
@@ -136,4 +155,3 @@ Future spec: `specs/research-runtime-version-gates.spec.md`
   model, so they deserve a larger release boundary.
 - `0.4.x`: Priority 5 and 6. Migration and version gates can ship once the new
   completion protocol is stable.
-

@@ -16,6 +16,7 @@ include = [
     "src/**/*",
     "presets/tech.toml",
     "presets/sports.toml",
+    "presets/github-trust.toml",
     "templates/**/*",
     "../../README.md",
 ]

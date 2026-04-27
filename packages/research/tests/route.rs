@@ -90,6 +90,27 @@ fn route_tech_github_repo() {
 }
 
 #[test]
+fn route_github_trust_preset_routes_github_repo() {
+    let (v, code, _) = run(&[
+        "route",
+        "https://github.com/dagster-io/dagster",
+        "--preset",
+        "github-trust",
+        "--json",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["preset"], "github-trust");
+    assert_eq!(v["data"]["executor"], "postagent");
+    assert_eq!(v["data"]["kind"], "github-repo-readme");
+    let cmd = v["data"]["command_template"].as_str().unwrap();
+    assert!(
+        cmd.contains("/repos/dagster-io/dagster/readme"),
+        "got {cmd}"
+    );
+    assert!(cmd.contains("$POSTAGENT.GITHUB.TOKEN"), "got {cmd}");
+}
+
+#[test]
 fn route_tech_github_issue() {
     let (v, code, _) = run(&[
         "route",

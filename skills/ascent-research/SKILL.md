@@ -114,6 +114,27 @@ ascent-research coverage <slug> --json
 
 Verify `fact_check_required=true` and `fact_checks_total >= 1`. If `report_ready_blockers` contains `fact_checks_total` or `fact_check_invalid_sources`, do NOT run `synthesize`; continue fetching accepted sources and emitting `fact_check` actions.
 
+## GitHub Trust / Fake-Star Audit
+
+For “fake GitHub stars”, repository trust, suspicious star growth, or investor/developer due diligence tasks, start with the deterministic audit hand before asking the LLM to interpret anything. Do not ask the model to decide whether stars are fake from vibes.
+
+```bash
+ascent-research github-audit <owner>/<repo> --depth timeline --sample 500 --out audit.json --html audit.html
+ascent-research new "<owner>/<repo> GitHub trust audit" --slug <owner>-<repo>-trust --preset github-trust --tag fact-check
+ascent-research add-local audit.json --slug <owner>-<repo>-trust
+ascent-research loop <owner>-<repo>-trust --provider codex --iterations 8
+ascent-research finish <owner>-<repo>-trust --open
+```
+
+Rules:
+
+- `github-audit` outputs trust score, risk score, band, confidence, reasons, and evidence; never call a repo “fake” or “real” deterministically.
+- If the user asks whether a repo looks trustworthy, show `audit.html` first. It is the deterministic scorecard: trust score, risk score, confidence, metric dashboard, reasons, and evidence gaps.
+- Use `--depth repo` for anonymous quick checks; use `stargazers` or `timeline` only when postagent can resolve `$POSTAGENT.GITHUB.TOKEN`.
+- The audit JSON is the evidence artifact. Add it with `add-local` before `loop` so the report cites the deterministic signals instead of re-deriving them.
+- `--preset github-trust` is for contextual follow-up sources; it does not replace `github-audit` scoring.
+- Finish still goes through the normal completion protocol: `coverage -> synthesize -> audit`.
+
 ## Mental Model
 
 ```
@@ -190,6 +211,19 @@ ascent-research add-local <path> [--slug <s>] [--glob '...']... [--max-file-byte
 - Caps enforced at walk time: default 256 KB per file, 2 MB per walk. Direct `add file:///…` calls get an 8 MB fetch-stage backstop.
 - Binary files (null-byte probe) are rejected; only text survives the gate.
 - Each accepted file becomes an independent source with `file://` URL — same pipeline as online `add`, goes through smell test, appears in `sources` and `coverage`.
+
+### GitHub trust audit
+
+```
+ascent-research github-audit <owner>/<repo> [--depth repo|stargazers|timeline] [--sample N] [--out audit.json] [--html audit.html]
+ascent-research github-audit https://github.com/<owner>/<repo> --depth timeline --sample 500 --out audit.json --html audit.html
+```
+
+- Produces a deterministic trust evidence envelope: repo ratios, sampled stargazer profile signals, timeline burst signals, trust score, risk score/band/confidence/reasons/evidence.
+- Default depth is `stargazers`, default sample is 200. Use `repo` when GitHub token auth is unavailable.
+- `stargazers` and `timeline` use `postagent` with `Authorization: Bearer $POSTAGENT.GITHUB.TOKEN`; no raw token should appear in stdout/stderr/session files.
+- `--out` writes the full JSON envelope for `add-local` ingestion into a follow-up `--preset github-trust` report.
+- `--html` writes the deterministic scorecard HTML. This is not the generic research report template and does not call an LLM.
 
 ### Autonomous loop (feature: `autoresearch`)
 

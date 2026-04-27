@@ -203,6 +203,7 @@ impl std::error::Error for PresetError {}
 
 const BUILTIN_TECH: &str = include_str!("../../presets/tech.toml");
 const BUILTIN_SPORTS: &str = include_str!("../../presets/sports.toml");
+const BUILTIN_GITHUB_TRUST: &str = include_str!("../../presets/github-trust.toml");
 
 /// Load and compile a preset, honoring resolution order:
 /// 1. `rules_path` (explicit file) if provided
@@ -273,6 +274,10 @@ pub fn load_preset(
     match name {
         "tech" => parse_and_compile(BUILTIN_TECH, Some("<builtin:tech>".to_string())),
         "sports" => parse_and_compile(BUILTIN_SPORTS, Some("<builtin:sports>".to_string())),
+        "github-trust" => parse_and_compile(
+            BUILTIN_GITHUB_TRUST,
+            Some("<builtin:github-trust>".to_string()),
+        ),
         other => Err(PresetError {
             sub_code: PresetSubCode::FileNotFound,
             message: format!("no preset named '{other}' (ship your own TOML with --rules)"),
@@ -768,6 +773,10 @@ mod tests {
         load_preset(Some("sports"), None).expect("builtin sports must load")
     }
 
+    fn github_trust() -> CompiledPreset {
+        load_preset(Some("github-trust"), None).expect("builtin github-trust must load")
+    }
+
     #[test]
     fn builtin_tech_loads() {
         let p = tech();
@@ -779,6 +788,13 @@ mod tests {
     fn builtin_sports_loads() {
         let p = sports();
         assert_eq!(p.name, "sports");
+        assert!(!p.rules.is_empty());
+    }
+
+    #[test]
+    fn builtin_github_trust_loads() {
+        let p = github_trust();
+        assert_eq!(p.name, "github-trust");
         assert!(!p.rules.is_empty());
     }
 

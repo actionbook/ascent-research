@@ -1,0 +1,35 @@
+name = "github-trust"
+description = "GitHub trust audits — deterministic audit JSON plus GitHub-native context"
+
+[[rule]]
+kind = "github-repo-readme"
+host = "github.com"
+path_segments = ["{owner}", "{repo}"]
+executor = "postagent"
+template = 'postagent send "https://api.github.com/repos/{owner}/{repo}/readme" -H "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN"'
+
+[[rule]]
+kind = "github-issue"
+host = "github.com"
+path_segments = ["{owner}", "{repo}", "issues", "{num}"]
+executor = "postagent"
+template = 'postagent send "https://api.github.com/repos/{owner}/{repo}/issues/{num}" -H "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN"'
+
+[[rule]]
+kind = "github-releases"
+host = "github.com"
+path_segments = ["{owner}", "{repo}", "releases"]
+executor = "postagent"
+template = 'postagent send "https://api.github.com/repos/{owner}/{repo}/releases" -H "Authorization: Bearer $POSTAGENT.GITHUB.TOKEN"'
+
+[[rule]]
+kind = "github-raw"
+host = "raw.githubusercontent.com"
+path_segments = ["{owner}", "{repo}", "{ref}", "{...path}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[fallback]
+executor = "browser"
+kind = "github-trust-browser-fallback"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
