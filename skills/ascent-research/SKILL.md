@@ -234,7 +234,7 @@ ascent-research wiki lint                    [--slug <s>] [--stale-days N]
 ### Output / QA
 
 ```
-ascent-research synthesize      [<slug>] [--no-render] [--open] [--bilingual]
+ascent-research synthesize      [<slug>] [--no-render] [--open] [--bilingual] [--pdf] [--pdf-output <path>]
 ascent-research report <slug>   --format rich-html|brief-md [--open | --no-open] [--stdout] [--output <path>]
 ascent-research series <tag>    [--open]
 ascent-research coverage        [<slug>]
@@ -242,6 +242,7 @@ ascent-research diff            [<slug>] [--unused-only]
 ```
 
 - `synthesize` is the full path: renders `report.json` + inline-SVG + wiki TOC + sources list + optional bilingual (`--bilingual` calls Claude to inject `<p class="tr-zh">` siblings).
+- PDF export is opt-in only: `synthesize <slug> --pdf` converts the rendered `report.html` to `<session>/report.pdf` through the local backend. It prefers isolated Playwright Chromium/headless_shell and keeps the HTML on the user's machine. If no safe local Chromium is installed, run `npx playwright install chromium` or set `ASR_PDF_CHROME_BIN`. Do not auto-launch the user's desktop Google Chrome; only opt into that fallback with `ASR_PDF_ALLOW_SYSTEM_CHROME=1` if explicitly requested. `--pdf-output <path>` overrides the output and implies `--pdf`.
 - `report --format brief-md` dumps a lean markdown digest — useful for PR descriptions or quick sharing.
 - `series <tag>` renders an HTML index for every session carrying that tag.
 - `coverage` returns metrics + `report_ready_blockers` (array of human-readable reasons). If `report_ready: true`, the session is done. For `--tag fact-check` sessions, inspect `fact_check_required`, `fact_checks_total`, and `fact_check_invalid_sources`.

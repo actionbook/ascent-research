@@ -197,6 +197,19 @@ ascent-research loop ssm --provider claude --iterations 10
 ascent-research synthesize ssm --bilingual --open
 ```
 
+PDF export is opt-in. The default backend is local and free: it uses an
+isolated headless Chromium when available, so the HTML stays on your machine
+and no paid API is required:
+
+```bash
+ascent-research synthesize ssm --bilingual --pdf
+```
+
+The local backend discovers Playwright Chromium first. If it is not installed,
+run `npx playwright install chromium` or set `ASR_PDF_CHROME_BIN` to a known
+safe browser binary. Desktop Google Chrome is not auto-launched by default; set
+`ASR_PDF_ALLOW_SYSTEM_CHROME=1` only if you explicitly want that fallback.
+
 ### B. Deep-dive a library's source tree
 
 ```bash
@@ -237,6 +250,7 @@ editor / grep / git / Obsidian all work without a custom client.
 | `diagrams/*.svg` | Hand-drawn figures inlined into the HTML report. |
 | `raw/` | Raw fetched content, one file per accepted source. |
 | `report.html` | Rendered editorial output — wiki TOC, inline SVGs, optional bilingual toggle. |
+| `report.pdf` | Optional local PDF export of `report.html`, created only by `synthesize --pdf` or `--pdf-output`. Defaults to isolated local Chromium. |
 
 Override the root via `ACTIONBOOK_RESEARCH_HOME=/some/path`. Legacy
 `~/.actionbook/research/` is read as a fallback so sessions from

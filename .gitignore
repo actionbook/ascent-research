@@ -27,3 +27,6 @@ target
 .agent-spec/
 docs/superpowers/plans/
 tmp/
+
+# macOS Finder metadata
+.DS_Store

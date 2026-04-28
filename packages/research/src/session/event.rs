@@ -117,6 +117,10 @@ pub enum SessionEvent {
         bilingual: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bilingual_provider: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pdf: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pdf_provider: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
@@ -125,6 +129,8 @@ pub enum SessionEvent {
         report_json_path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         report_html_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report_pdf_path: Option<String>,
         accepted_sources: u32,
         rejected_sources: u32,
         duration_ms: u64,
@@ -405,12 +411,15 @@ mod tests {
                 open: false,
                 bilingual: true,
                 bilingual_provider: Some("codex".into()),
+                pdf: true,
+                pdf_provider: Some("local".into()),
                 note: None,
             },
             SessionEvent::SynthesizeCompleted {
                 timestamp: ts(),
                 report_json_path: "report.json".into(),
                 report_html_path: Some("report.html".into()),
+                report_pdf_path: Some("report.pdf".into()),
                 accepted_sources: 3,
                 rejected_sources: 1,
                 duration_ms: 500,

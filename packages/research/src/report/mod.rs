@@ -10,6 +10,7 @@ pub mod bilingual;
 pub mod brief_md;
 pub mod builder;
 pub mod markdown;
+pub mod pdf_local;
 pub mod sources;
 pub mod template;
 pub mod wiki_render;

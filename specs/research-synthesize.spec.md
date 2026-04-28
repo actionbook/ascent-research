@@ -51,7 +51,13 @@ json-ui 报告"的机械组装器。
   - `## Findings` 缺失或为空:warning 但继续,报告用 placeholder "(no findings recorded)"
   - `## Metrics` `## Conclusion`:可选,缺了就不渲染对应 Section
 - Markdown 解析:用任意 CommonMark-compatible 库(实装决定具体 crate)
-- HTML 渲染:调用已有的 `json-ui` CLI 子进程(和 report.json 路径 + -o report.html)
+- HTML 渲染:生成 canonical `report.html`
+- PDF 渲染:默认关闭;仅当用户显式传 `--pdf` 或 `--pdf-output <path>` 时,把
+  `report.html` 转成 PDF。默认 provider 是 `local`,优先通过隔离的 Playwright
+  Chromium/headless_shell 在本机生成 PDF,不需要付费 API;可用 `ASR_PDF_CHROME_BIN`
+  指定安全浏览器路径。默认不得自动启动用户桌面版 Google Chrome;仅当
+  `ASR_PDF_ALLOW_SYSTEM_CHROME=1` 时才允许作为 fallback。默认输出
+  `<session>/report.pdf`。
 - Render 失败:保留 report.json,HTML 渲染失败不算 CLI fatal,但 error code 是 `RENDER_FAILED`
 - **Timestamp 一律 RFC3339 UTC**(含 footer `timestamp` 字段)
 - **`--open` 失败策略**:
@@ -60,10 +66,12 @@ json-ui 报告"的机械组装器。
   - `open` / `xdg-open` 子进程启动失败 → stderr warning,不影响主进程 exit code
 - **tracing 日志一律到 stderr**(与 actionbook CLI 的 dual-channel 约定一致)
 - **Synthesize 写的事件**:
-  - `synthesize_started` 起始
-  - `synthesize_completed` 带 `{report_json_path, report_html_path, accepted_sources, rejected_sources, duration_ms}`
+  - `synthesize_started` 起始,包含 `pdf` / `pdf_provider` 以记录是否请求 PDF 以及
+    实际 backend(`local`)
+  - `synthesize_completed` 带 `{report_json_path, report_html_path, report_pdf_path?, accepted_sources, rejected_sources, duration_ms}`
   - `synthesize_failed` 带 `{reason, stage}`
-- **可重跑**:重复运行 `research synthesize` 会覆盖 report.json / report.html
+- **可重跑**:重复运行 `research synthesize` 会覆盖 report.json / report.html;
+  仅当传 `--pdf` 时覆盖 report.pdf
   (用户期望是"刷新报告",不是累积)
 - 本 task **不**加任何创意性内容生成(没有 LLM 调用,没有自动摘要)
 
@@ -200,7 +208,7 @@ json-ui 报告"的机械组装器。
 - AI 生成内容(summary / rewrite)
 - 跨 session 合并成一份 meta-report
 - 增量 synthesize(只重新生成新加的源部分)
-- LaTeX / PDF 输出(只走 json-ui → HTML)
+- LaTeX 输出
 - 报告的多语言 / i18n
 - 批评 / 质量反馈(peer review 类)
 - 发布到云端(share link, 评论)
