@@ -7,10 +7,8 @@
 //! `<p class="tr-zh">` sibling immediately after it. The template's
 //! language toggle flips display based on `body.bilingual` class.
 //!
-//! Requires at least one LLM provider feature (`provider-claude` or
-//! `provider-codex`) at compile time. Without it, `inject_zh_translations`
-//! returns an error so the caller can degrade gracefully (keep monolingual
-//! output + log a warning).
+//! Requires at least one LLM provider feature (`provider-claude`,
+//! `provider-codex`, or `provider-opencode-go`) at compile time.
 //!
 //! Scope choices (deliberate MVP):
 //! - Translates only `<p>` elements — headings, lists, and figures are
@@ -32,7 +30,7 @@
 // Rather than chase each item with a per-item cfg, silence dead_code
 // for the whole module whenever no provider is present.
 #![cfg_attr(
-    not(any(feature = "provider-claude", feature = "provider-codex")),
+    not(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go")),
     allow(dead_code)
 )]
 
@@ -63,14 +61,14 @@ impl std::fmt::Display for BilingualError {
 /// `ProviderMissing` so the caller can skip translation and still render
 /// a monolingual report.
 pub fn inject_zh_translations(body_html: &str) -> Result<(String, Option<String>), BilingualError> {
-    #[cfg(not(any(feature = "provider-claude", feature = "provider-codex")))]
+    #[cfg(not(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go")))]
     {
         let _ = body_html;
         Err(BilingualError::ProviderMissing(
-            "no bilingual provider compiled in; rebuild with --features provider-claude or provider-codex".into(),
+            "no bilingual provider compiled in; rebuild with --features provider-claude, provider-codex, or provider-opencode-go".into(),
         ))
     }
-    #[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+    #[cfg(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go"))]
     {
         use crate::autoresearch::provider::ProviderError;
 
@@ -163,7 +161,7 @@ struct PSpan {
     inner_end: usize,
 }
 
-#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+#[cfg(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go"))]
 fn selected_provider_name() -> Result<&'static str, BilingualError> {
     let requested = std::env::var("ASR_BILINGUAL_PROVIDER")
         .or_else(|_| std::env::var("ASCENT_RESEARCH_BILINGUAL_PROVIDER"))
@@ -193,13 +191,25 @@ fn selected_provider_name() -> Result<&'static str, BilingualError> {
                 ))
             }
         }
+        "opencode-go" => {
+            #[cfg(feature = "provider-opencode-go")]
+            {
+                Ok("opencode-go")
+            }
+            #[cfg(not(feature = "provider-opencode-go"))]
+            {
+                Err(BilingualError::ProviderMissing(
+                    "ASR_BILINGUAL_PROVIDER=opencode-go requires --features provider-opencode-go".into(),
+                ))
+            }
+        }
         other => Err(BilingualError::ProviderMissing(format!(
-            "unknown ASR_BILINGUAL_PROVIDER={other}; expected claude or codex"
+            "unknown ASR_BILINGUAL_PROVIDER={other}; expected claude, codex, or opencode-go"
         ))),
     }
 }
 
-#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+#[cfg(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go"))]
 fn default_provider_name() -> &'static str {
     #[cfg(feature = "provider-claude")]
     {
@@ -209,9 +219,13 @@ fn default_provider_name() -> &'static str {
     {
         "codex"
     }
+    #[cfg(all(not(feature = "provider-claude"), not(feature = "provider-codex"), feature = "provider-opencode-go"))]
+    {
+        "opencode-go"
+    }
 }
 
-#[cfg(any(feature = "provider-claude", feature = "provider-codex"))]
+#[cfg(any(feature = "provider-claude", feature = "provider-codex", feature = "provider-opencode-go"))]
 async fn ask_provider(
     name: &str,
     system: &str,
@@ -245,6 +259,19 @@ async fn ask_provider(
             {
                 Err(ProviderError::NotAvailable(
                     "provider-codex feature not compiled in".into(),
+                ))
+            }
+        }
+        "opencode-go" => {
+            #[cfg(feature = "provider-opencode-go")]
+            {
+                let provider = crate::autoresearch::opencode_go::OpenCodeGoProvider::from_env()?;
+                provider.ask(system, user).await
+            }
+            #[cfg(not(feature = "provider-opencode-go"))]
+            {
+                Err(ProviderError::NotAvailable(
+                    "provider-opencode-go feature not compiled in".into(),
                 ))
             }
         }
