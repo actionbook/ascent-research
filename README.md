@@ -10,8 +10,8 @@
 ```bash
 ascent-research new "tokio internals 2026" --slug tokio --preset tech
 ascent-research add-local ~/tokio/tokio/src/runtime --glob '**/*.rs'
-ascent-research loop tokio --provider claude --iterations 12
-ascent-research finish tokio --open           # coverage -> HTML -> audit
+ascent-research loop tokio --iterations 12     # default: opencode-go + deepseek-v4-pro
+ascent-research finish tokio --open            # coverage -> HTML -> audit
 # (next day)
 ascent-research resume tokio && ascent-research loop tokio --iterations 8
 ```
@@ -47,9 +47,10 @@ the next turn stand on the last one's shoulders.
 
 ## Two ways to use it
 
-`ascent-research` is a CLI that calls an LLM provider (Claude via
-`cc-sdk`, Codex via `codex app-server`, or `fake` for tests). Which
-process hosts the agent decides the usage shape:
+`ascent-research` is a CLI that calls an LLM provider (OpenCode Go
+via HTTP API, Claude via `cc-sdk`, Codex via `codex app-server`,
+or `fake` for tests). Which process hosts the agent decides the
+usage shape:
 
 ### Standalone — ascent-research runs its own loop
 
@@ -60,7 +61,7 @@ batch / CI / "I just want a report."
 ```bash
 ascent-research new "tokio internals" --slug tokio
 ascent-research add-local ~/tokio/tokio/src
-ascent-research loop tokio --provider claude --iterations 12
+ascent-research loop tokio --iterations 12
 ascent-research finish tokio --open
 ```
 
@@ -153,35 +154,74 @@ deterministically without parsing prose.
 
 ## Install
 
+### Prerequisites
+
+- **Rust** stable (edition 2024) — https://rustup.rs
+- **Node.js** — for `postagent` (HTTP API fetches) and `actionbook` (browser fallback)
+- **Chrome** — required for browser-based web page fetching
+
+```bash
+# Install Node.js dependencies
+npm install -g postagent @actionbookdev/cli
+```
+
+### Build (all platforms)
+
 ```bash
 git clone https://github.com/actionbook/ascent-research
 cd ascent-research
 
-# Full build (loop + Claude provider) — what live sessions need
-cargo build -p ascent-research --release --features "autoresearch provider-claude provider-codex"
+# Recommended: OpenCode Go provider (deepseek-v4-pro, $10/month subscription)
+cargo build -p ascent-research --release --features "autoresearch provider-opencode-go"
 
-export PATH="$PWD/target/release:$PATH"
-ascent-research --help
+# Alternative: Claude provider (requires cc-sdk + Claude subscription)
+# cargo build -p ascent-research --release --features "autoresearch provider-claude"
+
+# Alternative: Codex provider (requires codex CLI + ChatGPT Plus)
+# cargo build -p ascent-research --release --features "autoresearch provider-codex"
+
+# Copy binary to PATH
+cp target/release/ascent-research ~/.cargo/bin/
+# or on Windows:
+# copy target\release\ascent-research.exe %USERPROFILE%\.cargo\bin\
 ```
 
-Alternative feature sets:
+### Feature flags
+
+| Feature | Description | Extra deps |
+|---------|-------------|------------|
+| `autoresearch` | Enables `ascent-research loop` command | tokio, async-trait |
+| `provider-opencode-go` | OpenCode Go API ($10/mo, deepseek-v4-pro default) | reqwest |
+| `provider-claude` | Claude via cc-sdk | cc-sdk |
+| `provider-codex` | Codex via `codex app-server` | (codex CLI on PATH) |
+
+### Windows-specific setup
+
+On Windows, npm installs `.cmd` wrapper scripts. The Rust binary cannot
+execute these directly and will fail with `os error 193`. Set these
+environment variables **permanently** (System Properties → Environment
+Variables, or in your shell profile):
+
+| Variable | Value | Why |
+|----------|-------|-----|
+| `ACTIONBOOK_BIN` | `C:\Users\<you>\AppData\Roaming\npm\actionbook.cmd` | Browser fallback for web page fetching |
+| `POSTAGENT_BIN` | `C:\Users\<you>\AppData\Roaming\npm\postagent.cmd` | HTTP API fetches (GitHub, arXiv, HN) |
+| `OPENCODE_API_KEY` | `sk-...` | API key from https://opencode.ai/auth |
+
+Verify:
+```bash
+ascent-research --json doctor --tool-smoke
+```
+
+### Provider model selection
+
+Default: **deepseek-v4-pro** (best instruction-following for autonomous loop).
+Override via environment variable:
 
 ```bash
-# Minimal — no autonomous loop, no LLM
-cargo build -p ascent-research --release
-
-# Loop with fake provider only (for scripted tests)
-cargo build -p ascent-research --release --features autoresearch
-
-# Loop with Codex instead of Claude
-cargo build -p ascent-research --release --features "autoresearch provider-codex"
+export ASR_OPENCODE_MODEL=qwen3.6-plus    # or glm-5.1, kimi-k2.6, minimax-m2.7
+export ASR_BILINGUAL_PROVIDER=opencode-go  # for --bilingual translation
 ```
-
-Prereqs for online ingest: Rust stable (edition 2024),
-[`postagent`](https://github.com/actionbook/postagent) for HTTP API fetches,
-optionally [`actionbook`](https://github.com/actionbook/actionbook)
-for browser fallback on JS-heavy sites. Neither is required if you only
-use `add-local`.
 
 ---
 
@@ -196,7 +236,7 @@ ascent-research batch \
   https://arxiv.org/abs/2312.00752 \
   https://github.com/HazyResearch/state-spaces \
   --concurrency 4
-ascent-research loop ssm --provider claude --iterations 10
+ascent-research loop ssm --iterations 10
 ascent-research finish ssm --bilingual --open
 ```
 
@@ -206,7 +246,7 @@ ascent-research finish ssm --bilingual --open
 ascent-research new "axum internals" --slug axum --preset tech
 ascent-research schema edit        # set your "what to emphasize"
 ascent-research add-local ~/axum/axum/src --glob '**/*.rs'
-ascent-research loop axum --provider claude --iterations 12
+ascent-research loop axum --iterations 12
 ascent-research finish axum --open
 ```
 
@@ -215,7 +255,7 @@ ascent-research finish axum --open
 ```bash
 ascent-research new "my agent-SE notes" --slug notes --preset tech
 ascent-research add-local ~/vault/agent-notes --glob '**/*.md'
-ascent-research loop notes --provider claude --iterations 10
+ascent-research loop notes --iterations 10
 ascent-research wiki query "what's my stance on code review for AI?" \
   --save-as my-code-review-stance
 ```
@@ -233,7 +273,7 @@ ascent-research github-audit dagster-io/dagster \
 ascent-research new "dagster-io/dagster GitHub trust audit" \
   --slug dagster-trust --preset github-trust --tag fact-check
 ascent-research add-local audit.json --slug dagster-trust
-ascent-research loop dagster-trust --provider claude --iterations 8
+ascent-research loop dagster-trust --iterations 8
 ascent-research finish dagster-trust --open
 ```
 
