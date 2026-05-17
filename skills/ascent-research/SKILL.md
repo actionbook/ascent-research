@@ -50,6 +50,135 @@ If provider smoke fails, **STOP** and surface the failing provider check. Do not
 
 **Data home:** all sessions, user preset overrides, wiki pages, and rendered reports live under `~/.actionbook/ascent-research/`. Override with `ACTIONBOOK_RESEARCH_HOME` for sandboxing. Upgraders from v0.2: the legacy `~/.actionbook/research/` tree is read-only — new writes land in the v0.3 canonical root.
 
+## V2 Browser Backend Setup (one-time, REQUIRED for `add`/`batch` on JS pages)
+
+`ascent-research` defaults to the V2 actionbook MCP backend
+(`ACTIONBOOK_BACKEND=v2-mcp`). Four things must be set up once — **without
+all four, every browser-based fetch will fail**.
+
+### 1. Actionbook Chrome extension + dedicated profile (recommended)
+
+Install [Actionbook Cloud (v2)](https://github.com/actionbook/actionbook-cloud/releases)
+in Chrome, v0.2.0-alpha.4 or later.
+
+**Strongly recommend a dedicated Chrome profile**, for two reasons:
+
+- **chrome.debugger conflict**: if actionbook shares a profile with a
+  password manager / AI sidebar / translation extension that injects
+  content frames into every page, Chrome will refuse to attach with
+  `Cannot access a chrome-extension:// URL of different extension`, and
+  every V2 attach call fails.
+- **Cookie scoping per profile**: fetching logged-in content (X / GitHub
+  private / SaaS dashboards) requires actionbook to be in the same
+  profile that is logged in. A mixed-profile setup = unlogged-in fetches.
+
+How to set up: Chrome top-right avatar → Add → new profile named
+"Actionbook Research" → install only actionbook in this profile → log
+into every research-target site here. macOS one-shot launcher:
+
+```bash
+open -na "Google Chrome" --args --profile-directory="Profile X"
+```
+
+If a user reports "V2 doesn't fetch / always EXTENSION_OFFLINE / always
+attach fails", **your first question is whether the profile is dedicated**.
+
+### 2. `ACTIONBOOK_API_KEY` permanent export
+
+```bash
+# Generate an ak_* token at https://actionbook.dev/dashboard/api-keys, then:
+echo 'export ACTIONBOOK_API_KEY=ak_xxxxxxxxxxxxxxxx' > ~/.actionbook.env
+chmod 600 ~/.actionbook.env
+echo '[ -f ~/.actionbook.env ] && source ~/.actionbook.env' >> ~/.zshrc  # or .bashrc
+```
+
+⚠️ **Never paste the token into chat / IDE prompt / git commit**.
+`ascent-research` never echoes the token in stderr / logs.
+
+### 3. Claude Code permission allow rule
+
+Claude Code's default classifier blocks certain "advanced" actionbook
+patterns (XHR interception / screenshot return / sensitive cookie probes),
+**even when these are explicitly recommended by actionbook's official
+manuals**. One settings rule whitelists the whole MCP tool permanently:
+
+```jsonc
+// ~/.claude/settings.json
+{
+  "permissions": {
+    "allow": [
+      "mcp__*__actionbook"  // allow all actionbook MCP tool calls
+    ]
+  }
+}
+```
+
+Whitelist actionbook narrowly; other tools (reading Chrome profile,
+calling arbitrary external APIs) **remain protected by the classifier**.
+Do not use `--dangerously-skip-permissions` to bypass globally.
+
+### 4. postagent secrets — one-time register per site
+
+postagent does not read shell env / gh CLI / macOS Keychain — it has its
+own secret store:
+
+```bash
+postagent auth github        # GitHub PAT (the tech preset routes GitHub URLs through the API by default)
+postagent auth x             # X (if you want the X API instead of V2 scraping the timeline)
+postagent auth openai        # OpenAI / Anthropic / etc.
+postagent auth status        # verify all stored
+```
+
+Without a GitHub token, every `github.com/<owner>/<repo>` URL in the
+`tech` preset hits unauthenticated GitHub API and **will almost certainly
+hit rate-limit 403**.
+
+### When to use V2 vs postagent vs add-local
+
+```
+Research target
+   │
+   ├── Public API (api.github.com / api.openai.com / etc.)
+   │   → preset auto-routes to postagent → fast (< 500ms)
+   │   Requires: postagent auth configured (step 4 above)
+   │
+   ├── Static / semi-static page (official blog / docs / changelog)
+   │   → preset fallback routes to V2 browser → ~3-5s
+   │   Requires: dedicated profile + actionbook online
+   │
+   ├── Heavy SPA + public content (HN / Reddit feed / x.com timeline)
+   │   → from inside Claude Code, call the actionbook MCP tool directly
+   │     (Claude writes its own run-code script + controls timeout)
+   │   → write captured content to local .md files
+   │   → `ascent-research add-local <dir>` injects them into the session
+   │   Requires: step 3 allow rule (otherwise classifier blocks XHR interception)
+   │
+   └── Login-required SaaS (Linear / Notion / GitHub private repo)
+       → same as above, AND the actionbook profile must be logged into that site
+       → cannot use postagent (no public API token, or too expensive)
+```
+
+### Pitfalls to avoid
+
+- **`document.cookie` is not a reliable login check.** X, GitHub, and
+  most SaaS set their session token (e.g. X's `auth_token`, GitHub's
+  `user_session`) as `HttpOnly` cookies — JavaScript cannot read them.
+  To verify "is the user logged in", **issue a request to an
+  authenticated endpoint and check status 200 vs 401**, do not grep
+  `document.cookie`.
+- **Don't expect 3 s `networkidle` on heavy SPAs.** GitHub PR pages and
+  x.com search results take 5-10 s to hydrate. The V2 inline JS now uses
+  a three-stage wait (DOMContentLoaded + networkidle + body-content
+  poll, ~16 s worst case) to handle this; if you write a custom
+  `run-code` for an even heavier site, mirror the same pattern.
+- **`add-local` accepts UTF-8 text now** (including dense CJK / Japanese
+  / Korean / emoji). Pre-2026-05-17 the text detector mis-flagged these
+  as binary; that's fixed in this build.
+- **GitHub PR / repo URLs route through postagent, not V2 browser** —
+  if `postagent auth github` is not configured, you'll get
+  `fetch_failed` even though V2 looks healthy. Step 4 above prevents
+  this.
+
 ## Mandatory Tail (MANDATORY — `finish` is preferred)
 
 `ascent-research loop` does **NOT** render `report.html`. Before you declare the task done, prefer the single completion protocol:

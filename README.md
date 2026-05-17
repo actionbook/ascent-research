@@ -179,9 +179,60 @@ cargo build -p ascent-research --release --features "autoresearch provider-codex
 
 Prereqs for online ingest: Rust stable (edition 2024),
 [`postagent`](https://github.com/actionbook/postagent) for HTTP API fetches,
-optionally [`actionbook`](https://github.com/actionbook/actionbook)
-for browser fallback on JS-heavy sites. Neither is required if you only
-use `add-local`.
+and (for JS-heavy pages) the Actionbook Chrome extension — see below.
+Neither is required if you only use `add-local`.
+
+### Browser ingest backends
+
+`ascent-research` picks between two actionbook backends based on
+`ACTIONBOOK_BACKEND` (default `v2-mcp`):
+
+| Env value | Path | What's needed |
+|---|---|---|
+| `v2-mcp` (default) | Cloud MCP at `edge.actionbook.dev/mcp` + Actionbook Chrome extension over WSS | `ACTIONBOOK_API_KEY` (an `ak_*` token), Chrome extension installed & signed in |
+| `v1-cli` | Local `actionbook` CLI subprocess (offline-capable fallback, permanently supported) | The [`actionbook`](https://github.com/actionbook/actionbook) binary on `PATH`, and your Chrome profile reachable by it |
+
+**V2 setup**:
+
+1. Install the **Actionbook Cloud (v2)** Chrome extension (v0.2.0-alpha.4
+   or later). Unpacked-load it from `chrome://extensions` → Load unpacked.
+2. Sign in via the extension popup.
+3. Get an `ak_*` token from [actionbook.dev/dashboard/api-keys](https://actionbook.dev/dashboard/api-keys) and export it:
+   ```bash
+   export ACTIONBOOK_API_KEY=ak_xxxxxxxxxxxxxxxx
+   ```
+   ⚠️ **Do not commit this token to git.** Prefer `.envrc` + direnv or a
+   secret manager. `ascent-research` never echoes the token in error
+   messages or logs.
+
+**Recommended: dedicated Chrome profile.** V2 drives the page through
+`chrome.debugger`, which Chromium will refuse to attach when other
+extensions inject `chrome-extension://` content frames into the target
+page (most password managers, AI sidebars, translation extensions, and
+DevTools extensions do this). Symptom: every browser fetch fails with
+`DEBUGGER_ATTACH_CONFLICT`.
+
+The cleanest fix is a dedicated Chrome profile that only has the
+Actionbook extension installed:
+
+```bash
+# macOS — launch a specific profile directly:
+open -na "Google Chrome" --args --profile-directory="Profile 2"
+```
+
+(Replace `Profile 2` with the directory name shown at `chrome://version`
+in your dedicated profile.)
+
+**Other V2 env vars**:
+
+| Env | Default | Purpose |
+|---|---|---|
+| `ACTIONBOOK_BACKEND` | `v2-mcp` | `v1-cli` to revert to subprocess; unknown values are fatal |
+| `ACTIONBOOK_MCP_ENDPOINT` | `https://edge.actionbook.dev/mcp` | Point at staging or a local worker |
+| `ACTIONBOOK_API_KEY` | — | `ak_*` token (required for v2-mcp) |
+| `ACTIONBOOK_BIN` | `actionbook` | V1 path only; ignored under v2-mcp |
+| `ACTIONBOOK_BROWSER_SESSION` | — | V1: shared session name. V2: tab-handle prefix (lets multiple ascent instances share one Chrome without colliding) |
+| `ACTIONBOOK_STDOUT_CAP` | 16 MB | Cap on per-call response body (both backends) |
 
 ---
 
