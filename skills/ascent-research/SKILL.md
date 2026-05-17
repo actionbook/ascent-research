@@ -319,15 +319,24 @@ ascent-research rm <slug>       [--force]
 ```
 ascent-research add <url>       [--slug <s>] [--timeout <ms>] [--readable | --no-readable]
                           [--min-bytes N] [--on-short-body {reject|warn}]
+                          [--frame-id <u32>] [--run-code-args <json>] [--reseed]
+                          [--actionbook-backend {v2-mcp|v1-cli}]
 ascent-research batch <url>...  [--slug <s>] [--concurrency 1..16] [--timeout <ms>] [--readable | --no-readable]
+                          [--frame-id <u32>] [--run-code-args <json>] [--reseed]
+                          [--actionbook-backend {v2-mcp|v1-cli}]
 ascent-research sources         [<slug>] [--rejected]
 ascent-research route <url>     [--rules <file>] [--preset <name>] [--prefer browser]
 ```
 
 - `add` routes via preset (`tech.toml` default) — HN/arXiv/GitHub hit postagent directly, other hosts fall through to actionbook browser.
+- Default per-source timeout is **90 s** since v0.4.0 (V2 server inner run-code default is 60 s; the extra 30 s covers edge + transport overhead). Override with `--timeout <ms>`.
+- `--frame-id` targets a specific iframe for V2 `run-code`. `--run-code-args` injects structured JSON arguments into the script.
+- `--reseed` re-probes the V2 catalog even when a wiki entry already exists (the default pre-fetch step skips already-seeded sites).
+- `--actionbook-backend v1-cli` forces the legacy subprocess path for this single call (useful when the V2 extension is offline). Otherwise the binary-wide default (env `ACTIONBOOK_BACKEND`, default `v2-mcp`) applies.
 - `batch` fetches in parallel workers; each call runs the smell test independently.
 - `route` prints the decision without fetching — useful for debugging preset rules.
 - Smell test fails → `SMELL_REJECTED` with a reason (`too_short`, `wrong_url`, `browser_chrome_error`, etc.). The URL attempt is always logged in jsonl.
+- A composite route rule (one rule, N parts merged under `composite-v1` schema) is a single source; if any part rejects, the source is rejected and `composite_failed_part` in the jsonl event names the failing label.
 
 ### Ingest — local (v3)
 
@@ -366,7 +375,8 @@ ascent-research loop [<slug>] --provider {fake|claude|codex} [--iterations N]
 - `claude` provider uses `cc-sdk` (requires `--features provider-claude` at build time).
 - `codex` provider spawns `codex app-server` (requires `--features provider-codex`).
 - Loop reads `SCHEMA.md` each turn; user edits via `schema edit` take effect on the next iteration.
-- Action types the loop accepts: `write_plan`, `write_overview`, `write_aside`, `write_section`, `write_diagram`, `note_diagram_needed`, `digest_source`, `fact_check`, `add`, `batch`, `write_wiki_page`, `append_wiki_page`.
+- Action types the loop accepts: `write_plan`, `write_overview`, `write_aside`, `write_section`, `write_diagram`, `note_diagram_needed`, `digest_source`, `fact_check`, `add`, `batch`, `write_wiki_page`, `append_wiki_page`, `actionbook_search`, `actionbook_manual`, `actionbook_run_code`.
+- New in v0.4.0 — the three `actionbook_*` actions are dispatch arms for the V2 MCP backend. Per-iteration caps: `actionbook_search` ≤ 5, `actionbook_manual` ≤ 5, `actionbook_run_code` ≤ 3. Long outputs get a `[…truncated to <N>KB…]` marker. Each emits an `ActionbookCalled` jsonl event.
 - Termination reasons: `report_ready`, `iterations_exhausted`, `max_actions_exhausted`, `provider_done`, `provider_unavailable`, `diverged` (same coverage signature 3 turns in a row).
 
 ### User-editable loop guidance (v3)

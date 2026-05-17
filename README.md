@@ -85,6 +85,34 @@ Claude Code / Codex instance, or vice versa.
 
 ---
 
+## What's new in 0.4.0
+
+- **V2 Actionbook MCP backend is now the default** for browser-rendered
+  fetches (Cloud Worker at `edge.actionbook.dev/mcp` + Chrome extension
+  over WSS). Set `ACTIONBOOK_BACKEND=v1-cli` to keep the old local-CLI
+  path — it's a **permanent fallback**, not slated for removal.
+- **Catalog seed pre-fetch**: every `add` / `batch` first probes the V2
+  catalog and seeds matching actions into the session wiki, so the
+  agent knows what's known about a site before navigating.
+- **Composite source fetch**: one rule can fan out into N parts
+  (e.g. postagent metadata + browser rendered) merged under
+  `composite-v1`; short-circuits on first part failure with a labelled
+  `composite_failed_part` event.
+- **3 new autoresearch actions** for the loop: `actionbook_search`,
+  `actionbook_manual`, `actionbook_run_code`.
+- **New flags** on `add` / `batch`: `--frame-id`, `--run-code-args`,
+  `--reseed`, `--actionbook-backend`.
+- **Default per-source timeout** raised from 30 s → 90 s (V2 server's
+  inner run-code budget is 60 s; extra 30 s covers edge overhead).
+- Fixes: smell `www.` ↔ apex equivalence; CJK / UTF-8 docs now pass the
+  `add-local` text detector; user `--timeout > 60s` is no longer
+  silently truncated by the V2 server's hard cap.
+
+See `CHANGELOG.md` for the full list and `docs/rfc/v2-session-export-to-postagent.md`
+for the cross-tool RFC that didn't ship in this release.
+
+---
+
 ## Why it's different
 
 Five properties — each validated end-to-end across four live research
