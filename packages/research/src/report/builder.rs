@@ -547,6 +547,9 @@ Real overview content that passes the placeholder heuristic cleanly.
                 bytes: 100,
                 trust_score: 2.0,
                 note: None,
+                composite: None,
+                parts: None,
+                part_bytes: None,
             },
             SessionEvent::SourceAccepted {
                 timestamp: Utc::now(),
@@ -557,6 +560,9 @@ Real overview content that passes the placeholder heuristic cleanly.
                 bytes: 800,
                 trust_score: 1.0,
                 note: None,
+                composite: None,
+                parts: None,
+                part_bytes: None,
             },
             SessionEvent::SourceRejected {
                 timestamp: Utc::now(),
@@ -568,6 +574,9 @@ Real overview content that passes the placeholder heuristic cleanly.
                 observed_bytes: None,
                 rejected_raw_path: None,
                 note: None,
+                composite: None,
+                parts: None,
+                failed_part: None,
             },
         ];
         let out = build(&ReportInput {
@@ -607,6 +616,9 @@ Real overview content that passes the placeholder heuristic cleanly.
                 bytes: 100,
                 trust_score: 2.0,
                 note: None,
+                composite: None,
+                parts: None,
+                part_bytes: None,
             },
             SessionEvent::SourceRejected {
                 timestamp: Utc::now(),
@@ -618,6 +630,9 @@ Real overview content that passes the placeholder heuristic cleanly.
                 observed_bytes: None,
                 rejected_raw_path: None,
                 note: None,
+                composite: None,
+                parts: None,
+                failed_part: None,
             },
         ];
         let out = build(&ReportInput {

@@ -119,6 +119,38 @@ pub fn extract_http_links(md: &str, exclude_sources_block: bool) -> Vec<String> 
     while i < bytes.len() {
         // Look for "](http" which is the start of a markdown-link URL.
         if bytes[i] == b']' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
+            // Image-syntax guard: markdown image is `![alt](url)`. The URL
+            // there names an embedded media asset, not a cited research
+            // source — citing FUCORY's tweet attachment under `![](pbs.twimg.com/…)`
+            // must NOT count as "source hallucinated". Scan back to the
+            // matching `[`; if the preceding byte is `!`, this is image
+            // syntax and we skip extraction.
+            let mut is_image = false;
+            let mut depth_back: i32 = 0;
+            let mut j = i;
+            while j > 0 {
+                j -= 1;
+                let b = bytes[j];
+                if b == b'\n' {
+                    break; // don't scan across paragraphs
+                }
+                if b == b']' {
+                    depth_back += 1;
+                } else if b == b'[' {
+                    if depth_back == 0 {
+                        // Matched `[`; check for `!` prefix.
+                        if j > 0 && bytes[j - 1] == b'!' {
+                            is_image = true;
+                        }
+                        break;
+                    }
+                    depth_back -= 1;
+                }
+            }
+            if is_image {
+                i += 1;
+                continue;
+            }
             let start = i + 2;
             // Match the closing `)` that balances the opening `(`, so URLs
             // like `https://en.wikipedia.org/wiki/Function_(mathematics)`
@@ -291,6 +323,22 @@ Long notes here.
         let md = "[a](mailto:x@y) [b](ftp://host) [c](/local/path) [ok](https://ok.test) [f](file:///tmp/source.md)";
         let links = extract_http_links(md, false);
         assert_eq!(links, vec!["https://ok.test", "file:///tmp/source.md"]);
+    }
+
+    #[test]
+    fn extract_http_links_skips_markdown_image_syntax() {
+        // `![alt](url)` is embedded media, not a cited research source.
+        // Only true link syntax `[text](url)` should count toward citation.
+        let md = "Embedded image: ![](https://pbs.twimg.com/media/abc.jpg) \
+                  and also ![alt text](https://pbs.twimg.com/card_img/x.jpg) \
+                  but here is a real cite [paper](https://arxiv.org/abs/1234.5678).";
+        let mut links = extract_http_links(md, false);
+        links.sort();
+        assert_eq!(
+            links,
+            vec!["https://arxiv.org/abs/1234.5678"],
+            "image-syntax URLs must NOT be counted as cited sources"
+        );
     }
 
     #[test]

@@ -60,6 +60,7 @@ mod tests {
                 executor: "postagent".into(),
                 kind: "hn-item".into(),
                 command_template: "...".into(),
+                composite: None,
             },
             note: None,
         };

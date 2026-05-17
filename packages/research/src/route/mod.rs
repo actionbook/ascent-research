@@ -5,5 +5,6 @@
 pub mod rules;
 
 pub use rules::{
-    Classification, Executor, Preset, PresetError, PresetSubCode, Route, classify, load_preset,
+    Classification, Executor, Preset, PresetError, PresetSubCode, ResolvedPart, Route, classify,
+    load_preset,
 };

@@ -4,13 +4,15 @@
 //! orchestrate, but never spawn subprocess or parse response JSON directly.
 
 pub mod browser;
+pub mod browser_v2;
+pub mod composite;
 pub mod local;
 pub mod postagent;
 pub mod smell;
 
 use serde::Serialize;
 
-use crate::route::Executor as RouteExecutor;
+use crate::route::{Executor as RouteExecutor, ResolvedPart};
 use crate::session::event::{RejectReason, RouteDecision};
 
 /// Raw output captured from a fetch subprocess (postagent or actionbook).
@@ -35,12 +37,45 @@ pub struct FetchOutcome {
     pub warnings: Vec<String>,
     /// Body length as reported / derived, for envelope `bytes` field.
     pub bytes: u64,
+    /// Composite-only: list of all part labels in fan-out order. `None` on
+    /// single-backend fetches.
+    pub composite_parts: Option<Vec<String>>,
+    /// Composite-only: per-part body byte counts. Sum equals `bytes`.
+    pub composite_part_bytes: Option<std::collections::BTreeMap<String, u64>>,
+    /// Composite-only: when rejected, the label of the failing part.
+    pub composite_failed_part: Option<String>,
+    /// Composite-only: per-part trust scores (max becomes composite trust).
+    pub composite_part_trust: Option<std::collections::BTreeMap<String, f64>>,
+}
+
+impl Default for FetchOutcome {
+    fn default() -> Self {
+        Self {
+            accepted: false,
+            observed_url: None,
+            observed_bytes: 0,
+            reject_reason: None,
+            warnings: Vec::new(),
+            bytes: 0,
+            composite_parts: None,
+            composite_part_bytes: None,
+            composite_failed_part: None,
+            composite_part_trust: None,
+        }
+    }
 }
 
 /// Execute a fetch for a single URL and return the raw bytes plus the
 /// smell-tested outcome. No session state is mutated — this function is
 /// side-effect-free apart from the subprocess it spawns, so it can be called
 /// from a worker thread in a batch.
+///
+/// `frame_id` / `run_code_args` are V2-browser-only pass-through flags
+/// (spec `v2-frame-id-runcode-args.spec.md`). Non-browser executors
+/// (postagent / local) silently ignore both: they have no equivalent
+/// concept and the CLI marks the flags V2-only, so a quiet drop preserves
+/// the simple call sites.
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     decision: &RouteDecision,
     slug: &str,
@@ -49,12 +84,66 @@ pub fn execute(
     readable: bool,
     timeout_ms: u64,
     smell_cfg: smell::SmellConfig,
+    frame_id: Option<u32>,
+    run_code_args: Option<&serde_json::Value>,
 ) -> (Vec<u8>, FetchOutcome, String) {
+    execute_with_composite(
+        decision,
+        None,
+        slug,
+        raw_n,
+        url,
+        readable,
+        timeout_ms,
+        smell_cfg,
+        frame_id,
+        run_code_args,
+    )
+}
+
+/// Extended entry that accepts an optional composite-parts list (carried
+/// from `route::classify` to here). When `composite_parts.is_some()` the
+/// dispatch goes to `composite::execute_composite`; otherwise it falls
+/// through to the single-backend path (byte-for-byte unchanged for the
+/// 99% non-composite case).
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with_composite(
+    decision: &RouteDecision,
+    composite_parts: Option<&[ResolvedPart]>,
+    slug: &str,
+    raw_n: u32,
+    url: &str,
+    readable: bool,
+    timeout_ms: u64,
+    smell_cfg: smell::SmellConfig,
+    frame_id: Option<u32>,
+    run_code_args: Option<&serde_json::Value>,
+) -> (Vec<u8>, FetchOutcome, String) {
+    if let Some(parts) = composite_parts {
+        return composite::execute_composite(
+            parts,
+            slug,
+            raw_n,
+            url,
+            readable,
+            timeout_ms,
+            smell_cfg,
+            frame_id,
+            run_code_args,
+        );
+    }
     match RouteExecutor::parse(&decision.executor) {
         Some(RouteExecutor::Postagent) => run_postagent(decision, timeout_ms),
-        Some(RouteExecutor::Browser) => {
-            run_browser(slug, raw_n, url, readable, timeout_ms, smell_cfg)
-        }
+        Some(RouteExecutor::Browser) => run_browser(
+            slug,
+            raw_n,
+            url,
+            readable,
+            timeout_ms,
+            smell_cfg,
+            frame_id,
+            run_code_args,
+        ),
         Some(RouteExecutor::Local) => run_local(url, smell_cfg),
         None => (
             Vec::new(),
@@ -65,6 +154,7 @@ pub fn execute(
                 reject_reason: Some(RejectReason::FetchFailed),
                 warnings: vec![format!("unknown executor '{}'", decision.executor)],
                 bytes: 0,
+                ..Default::default()
             },
             decision.executor.clone(),
         ),
@@ -110,6 +200,7 @@ fn run_local(url: &str, smell_cfg: smell::SmellConfig) -> (Vec<u8>, FetchOutcome
                 reject_reason: Some(reason),
                 warnings: vec![msg],
                 bytes: 0,
+                ..Default::default()
             };
             (Vec::new(), outcome, "local".into())
         }
@@ -143,6 +234,7 @@ fn run_postagent(decision: &RouteDecision, timeout_ms: u64) -> (Vec<u8>, FetchOu
                             reject_reason: Some(RejectReason::FetchFailed),
                             warnings: vec![first],
                             bytes: 0,
+                            ..Default::default()
                         }
                     } else if raw.exit_code != 0 && !stderr_has_warning_marker {
                         FetchOutcome {
@@ -156,6 +248,7 @@ fn run_postagent(decision: &RouteDecision, timeout_ms: u64) -> (Vec<u8>, FetchOu
                                 stderr_text.lines().next().unwrap_or("")
                             )],
                             bytes: raw.raw_stdout.len() as u64,
+                            ..Default::default()
                         }
                     } else {
                         smell::judge_api(&smell::ApiResponse {
@@ -175,6 +268,7 @@ fn run_postagent(decision: &RouteDecision, timeout_ms: u64) -> (Vec<u8>, FetchOu
                         raw.exit_code
                     )],
                     bytes: raw.raw_stdout.len() as u64,
+                    ..Default::default()
                 },
             };
             (raw.raw_stdout, outcome, "postagent".into())
@@ -187,12 +281,14 @@ fn run_postagent(decision: &RouteDecision, timeout_ms: u64) -> (Vec<u8>, FetchOu
                 reject_reason: Some(RejectReason::FetchFailed),
                 warnings: vec![msg],
                 bytes: 0,
+                ..Default::default()
             };
             (Vec::new(), outcome, "postagent".into())
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_browser(
     slug: &str,
     tab_n: u32,
@@ -200,8 +296,10 @@ fn run_browser(
     readable: bool,
     timeout_ms: u64,
     smell_cfg: smell::SmellConfig,
+    frame_id: Option<u32>,
+    run_code_args: Option<&serde_json::Value>,
 ) -> (Vec<u8>, FetchOutcome, String) {
-    match browser::run(slug, tab_n, url, readable, timeout_ms) {
+    match browser::run(slug, tab_n, url, readable, timeout_ms, frame_id, run_code_args) {
         Ok(run) => {
             let outcome = smell::judge_browser_with(
                 &smell::BrowserResponse {
@@ -222,13 +320,14 @@ fn run_browser(
                 reject_reason: Some(RejectReason::FetchFailed),
                 warnings: vec![msg],
                 bytes: 0,
+                ..Default::default()
             };
             (Vec::new(), outcome, "browser".into())
         }
     }
 }
 
-fn postagent_args_from_template(template: &str) -> Option<Vec<String>> {
+pub(super) fn postagent_args_from_template(template: &str) -> Option<Vec<String>> {
     let tokens = shell_words(template)?;
     if tokens.first().map(String::as_str) != Some("postagent") {
         return None;
@@ -269,7 +368,7 @@ fn shell_words(input: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-fn extract_api_url(template: &str) -> Option<String> {
+pub(super) fn extract_api_url(template: &str) -> Option<String> {
     let start = template.find('"')?;
     let rest = &template[start + 1..];
     let end = rest.find('"')?;

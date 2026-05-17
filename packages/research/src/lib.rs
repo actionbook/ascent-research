@@ -12,6 +12,7 @@
 #[cfg(feature = "autoresearch")]
 pub mod autoresearch;
 
+pub mod catalog;
 pub mod cli;
 pub mod commands;
 pub mod fetch;

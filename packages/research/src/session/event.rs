@@ -70,6 +70,19 @@ pub enum SessionEvent {
         trust_score: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// Composite source marker. Absent on single-backend events
+        /// (legacy parsers must treat missing as `false`). Spec §
+        /// "session.jsonl event".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        composite: Option<bool>,
+        /// Labels of each composite part in order. Always populated when
+        /// `composite == Some(true)`; absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parts: Option<Vec<String>>,
+        /// Per-part raw body bytes; sum equals top-level `bytes`. Map
+        /// keys are part labels.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        part_bytes: Option<std::collections::BTreeMap<String, u64>>,
     },
     FallbackSelected {
         timestamp: DateTime<Utc>,
@@ -112,6 +125,16 @@ pub enum SessionEvent {
         rejected_raw_path: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
+        /// Composite source marker. Absent on single-backend events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        composite: Option<bool>,
+        /// Labels of all composite parts (whether they ran or not).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parts: Option<Vec<String>>,
+        /// Which part triggered the composite rejection. Names a label
+        /// from `parts`. Absent on single-backend rejections.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed_part: Option<String>,
     },
     ToolCallStarted {
         timestamp: DateTime<Utc>,
@@ -334,6 +357,62 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    /// v3: a wiki page was seeded from the actionbook catalog before a
+    /// fetch ran. Each successful seed produces one event; silently-
+    /// skipped seeds (no API key, V1 backend, no catalog hit, MCP error)
+    /// produce NONE — that's the whole point of the "silent skip"
+    /// semantic (spec § 失败处理 / actionbook-catalog-seed).
+    ///
+    /// `source` is hardcoded to `"catalog"` to disambiguate from user-
+    /// authored wiki pages and from synthesis-time auto-summaries.
+    /// `group` and `action` may be missing when the catalog hit only
+    /// names a site.
+    WikiSeeded {
+        timestamp: DateTime<Utc>,
+        url: String,
+        host: String,
+        site: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+        page: String,
+        bytes: u64,
+        source: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+
+    /// v4 (autoresearch-actionbook-tools): the autoresearch loop dispatched
+    /// an LLM-emitted `actionbook_search` / `actionbook_manual` /
+    /// `actionbook_run_code` action. One event per action attempt — including
+    /// fail-soft skips, cap-exceeded rejections, and dry-run print-only
+    /// passes — so the `research session audit` surface can reconstruct
+    /// exactly which V2 MCP tools the LLM exercised this run.
+    ///
+    /// `outcome` is one of `ok` / `fail_soft` / `cap_exceeded` / `dry_run`.
+    /// `error_code` is populated only for `fail_soft` (e.g.
+    /// `extension_offline`, `api_key_missing`, `v1_backend_no_mcp`,
+    /// `search_zero_hits`, `manual_not_found`, `runcode_eval_failed`,
+    /// `runcode_timeout`, `mcp_transport_error`). `wiki_seeded_pages` is
+    /// populated only for `actionbook_manual` actions that successfully
+    /// wrote a fresh wiki page (empty when the page was dedupe-skipped).
+    ActionbookCalled {
+        timestamp: DateTime<Utc>,
+        iteration: u32,
+        action_type: String,
+        cmd_summary: String,
+        outcome: String,
+        result_bytes: u64,
+        #[serde(default, skip_serializing_if = "is_false")]
+        result_truncated: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        wiki_seeded_pages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error_code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -341,6 +420,20 @@ pub struct RouteDecision {
     pub executor: String,
     pub kind: String,
     pub command_template: String,
+    /// Composite fan-out parts. `None` (and skip-serialized) on single-
+    /// backend rules — keeps legacy `source_attempted` jsonl events
+    /// byte-identical to v0.3. Each part carries its post-substitution
+    /// command + label so the fetch layer doesn't need to re-look-up
+    /// the rule. Spec § "RouteDecision 透传 composite".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composite: Option<Vec<ResolvedPartEvent>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedPartEvent {
+    pub executor: String,
+    pub command: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,6 +547,7 @@ mod tests {
                     executor: "postagent".into(),
                     kind: "hn-item".into(),
                     command_template: "...".into(),
+                    composite: None,
                 },
                 note: None,
             },
@@ -466,6 +560,9 @@ mod tests {
                 bytes: 1234,
                 trust_score: 2.0,
                 note: None,
+                composite: None,
+                parts: None,
+                part_bytes: None,
             },
             SessionEvent::FallbackSelected {
                 timestamp: ts(),
@@ -500,6 +597,9 @@ mod tests {
                 observed_bytes: Some(0),
                 rejected_raw_path: None,
                 note: None,
+                composite: None,
+                parts: None,
+                failed_part: None,
             },
             SessionEvent::SynthesizeStarted {
                 timestamp: ts(),

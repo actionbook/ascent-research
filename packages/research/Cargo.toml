@@ -1,6 +1,6 @@
 [package]
 name = "ascent-research"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 description = "ascent-research — an incremental research workflow CLI for AI agents. Every session resumes; knowledge accretes across runs. Mixes HTTP, browser, and local file ingest into a durable per-session wiki + figure-rich HTML report."
 license = "MIT"
@@ -41,6 +41,13 @@ regex = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 walkdir = "2"
 globset = "0.4"
+
+# V2 actionbook MCP backend (fetch/browser_v2.rs). `ureq` is the smallest
+# pure-Rust synchronous HTTP client with native rustls; matches ascent's
+# subprocess-style blocking fetch model and avoids pulling tokio into the
+# non-autoresearch build. Not optional — V2 backend is the default and CI
+# still wants `cargo build` (no features) to compile the dispatcher.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 # Autoresearch loop dependencies — each is optional and only pulled in under
 # the matching feature. Default build stays LLM-free.

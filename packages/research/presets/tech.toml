@@ -62,6 +62,36 @@ path_segments = ["abs", "{id}"]
 executor = "browser"
 template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
 
+# ─── x.com (and twitter.com mirror) ───────────────────────────────────────
+# Spec: specs/x-com-tweet-runcode-flavor.spec.md
+#
+# These rules route x.com URLs through the browser executor so the V2
+# backend picks up the XTweet runcode flavor (via flavor_for_url) — the
+# default networkidle-then-poll waits don't capture X's lazy-hydrated
+# <article> element. V1 CLI users hit the same template and benefit from
+# v1 actionbook's own selector-aware waits.
+
+[[rule]]
+kind = "x-tweet-status"
+host = "x.com"
+path_segments = ["{user}", "status", "{id}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "x-search-live"
+host = "x.com"
+path_segments = ["search"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
+[[rule]]
+kind = "x-profile"
+host = "x.com"
+path_segments = ["{user}"]
+executor = "browser"
+template = '''actionbook browser new-tab "{url}" --session <s> --tab <t> && actionbook browser wait network-idle --session <s> --tab <t> && actionbook browser text --session <s> --tab <t>'''
+
 [fallback]
 executor = "browser"
 kind = "browser-fallback"

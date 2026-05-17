@@ -1,18 +1,24 @@
-//! actionbook browser 3-step subprocess sequence:
-//! new-tab → wait network-idle → text [--readable] → close-tab (best-effort).
+//! Browser fetch dispatcher.
 //!
-//! Session and tab IDs are allocated by this module: session = "research-<slug>",
-//! tab = "t-<N>" where N is the add sequence number.
+//! Two backends share the public `run(...)` entry:
+//!   - V1 CLI (`ACTIONBOOK_BACKEND=v1-cli` or legacy default) — local
+//!     subprocess sequence: new-tab → wait network-idle → text [--readable]
+//!     → close-tab (best-effort). Session = "research-<slug>", tab = "t-<N>".
+//!   - V2 MCP (default, `ACTIONBOOK_BACKEND=v2-mcp`) — HTTPS JSON-RPC to
+//!     edge.actionbook.dev/mcp + user's Chrome extension over WSS. Sequence
+//!     is new-tab → run-code (text extraction) → close. Tab handle =
+//!     "research-<slug>-<N>" by default. See `browser_v2.rs`.
 //!
-//! Each step emits a JSON envelope `{ok, context, data, error, meta}`.
-//! We parse the text step's `context.url` + `data.value` for the smell test.
+//! V1 envelope parsing (each step emits `{ok, context, data, error, meta}`)
+//! and the smell-test contract are unchanged on both paths — V2 returns the
+//! same `(observed_url, body)` shape via its run-code result.
 
 use serde_json::Value;
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use super::RawFetch;
+use super::{browser_v2, RawFetch};
 
 pub const ACTIONBOOK_STDOUT_CAP: usize = 16 * 1024 * 1024;
 
@@ -24,6 +30,56 @@ pub struct BrowserRun {
     pub raw: RawFetch,
     pub observed_url: String,
     pub body: Vec<u8>,
+}
+
+/// Which backend implementation to use. Resolved per-call from
+/// `ACTIONBOOK_BACKEND`; unrecognised values are fatal so a typo doesn't
+/// silently downgrade behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    V1Cli,
+    V2Mcp,
+}
+
+/// Resolve backend from `ACTIONBOOK_BACKEND`. Defaults to V2Mcp.
+///
+/// `Err(message)` is returned (not panic) so callers can surface it as a
+/// regular `FetchFailed` warning and the rest of the research session keeps
+/// running. The error message names both legal values so an agent's next
+/// retry sees the fix immediately.
+pub fn resolve_backend() -> Result<Backend, String> {
+    match std::env::var("ACTIONBOOK_BACKEND").as_deref() {
+        Ok("v1-cli") => Ok(Backend::V1Cli),
+        Ok("v2-mcp") | Err(_) => Ok(Backend::V2Mcp),
+        Ok(other) => Err(format!(
+            "invalid ACTIONBOOK_BACKEND value '{other}' — expected one of: v1-cli, v2-mcp"
+        )),
+    }
+}
+
+/// Dispatcher entry. Resolves `ACTIONBOOK_BACKEND` and delegates to the
+/// V1 subprocess path or the V2 MCP path.
+///
+/// `frame_id` / `run_code_args` are V2-only pass-through flags
+/// (spec `v2-frame-id-runcode-args.spec.md`); the V1 path silently
+/// ignores both — V1 actionbook CLI has no equivalent and the CLI
+/// `--help` text labels these "V2-only", so a quiet drop preserves
+/// the V1 fallback path for callers who happen to set them.
+pub fn run(
+    slug: &str,
+    tab_n: u32,
+    url: &str,
+    readable: bool,
+    timeout_ms: u64,
+    frame_id: Option<u32>,
+    run_code_args: Option<&Value>,
+) -> Result<BrowserRun, String> {
+    match resolve_backend()? {
+        Backend::V1Cli => run_v1_impl(slug, tab_n, url, readable, timeout_ms),
+        Backend::V2Mcp => {
+            browser_v2::run(slug, tab_n, url, readable, timeout_ms, frame_id, run_code_args)
+        }
+    }
 }
 
 /// Session name to pass to `actionbook browser`. If the caller has exported
@@ -53,8 +109,10 @@ pub fn tab_id_for(n: u32) -> String {
     format!("t-{n}")
 }
 
-/// Run the 3-step sequence. Shared `timeout_ms` budget across all steps.
-pub fn run(
+/// V1 CLI implementation: 3-step actionbook subprocess sequence. Shared
+/// `timeout_ms` budget across all steps. Public entry is `run` above; this
+/// is only reached when `ACTIONBOOK_BACKEND=v1-cli`.
+fn run_v1_impl(
     slug: &str,
     tab_n: u32,
     url: &str,
@@ -400,6 +458,38 @@ mod tests {
         });
         with_env("ACTIONBOOK_BROWSER_SESSION", Some(""), || {
             assert!(should_autostart_session());
+        });
+    }
+
+    // ---- Backend resolution (spec § Backend dispatch) ----
+
+    #[test]
+    fn v2_backend_default_when_env_unset() {
+        with_env("ACTIONBOOK_BACKEND", None, || {
+            assert_eq!(resolve_backend().unwrap(), Backend::V2Mcp);
+        });
+    }
+
+    #[test]
+    fn v2_backend_v1_fallback_when_env_set() {
+        with_env("ACTIONBOOK_BACKEND", Some("v1-cli"), || {
+            assert_eq!(resolve_backend().unwrap(), Backend::V1Cli);
+        });
+    }
+
+    #[test]
+    fn v2_backend_explicit_v2_value() {
+        with_env("ACTIONBOOK_BACKEND", Some("v2-mcp"), || {
+            assert_eq!(resolve_backend().unwrap(), Backend::V2Mcp);
+        });
+    }
+
+    #[test]
+    fn v2_backend_unknown_value_fatal() {
+        with_env("ACTIONBOOK_BACKEND", Some("foo"), || {
+            let err = resolve_backend().expect_err("unknown value must be fatal");
+            assert!(err.contains("v1-cli"), "error message must mention v1-cli: {err}");
+            assert!(err.contains("v2-mcp"), "error message must mention v2-mcp: {err}");
         });
     }
 

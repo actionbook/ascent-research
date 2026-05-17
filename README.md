@@ -85,6 +85,34 @@ Claude Code / Codex instance, or vice versa.
 
 ---
 
+## What's new in 0.4.0
+
+- **V2 Actionbook MCP backend is now the default** for browser-rendered
+  fetches (Cloud Worker at `edge.actionbook.dev/mcp` + Chrome extension
+  over WSS). Set `ACTIONBOOK_BACKEND=v1-cli` to keep the old local-CLI
+  path — it's a **permanent fallback**, not slated for removal.
+- **Catalog seed pre-fetch**: every `add` / `batch` first probes the V2
+  catalog and seeds matching actions into the session wiki, so the
+  agent knows what's known about a site before navigating.
+- **Composite source fetch**: one rule can fan out into N parts
+  (e.g. postagent metadata + browser rendered) merged under
+  `composite-v1`; short-circuits on first part failure with a labelled
+  `composite_failed_part` event.
+- **3 new autoresearch actions** for the loop: `actionbook_search`,
+  `actionbook_manual`, `actionbook_run_code`.
+- **New flags** on `add` / `batch`: `--frame-id`, `--run-code-args`,
+  `--reseed`, `--actionbook-backend`.
+- **Default per-source timeout** raised from 30 s → 90 s (V2 server's
+  inner run-code budget is 60 s; extra 30 s covers edge overhead).
+- Fixes: smell `www.` ↔ apex equivalence; CJK / UTF-8 docs now pass the
+  `add-local` text detector; user `--timeout > 60s` is no longer
+  silently truncated by the V2 server's hard cap.
+
+See `CHANGELOG.md` for the full list and `docs/rfc/v2-session-export-to-postagent.md`
+for the cross-tool RFC that didn't ship in this release.
+
+---
+
 ## Why it's different
 
 Five properties — each validated end-to-end across four live research
@@ -179,9 +207,60 @@ cargo build -p ascent-research --release --features "autoresearch provider-codex
 
 Prereqs for online ingest: Rust stable (edition 2024),
 [`postagent`](https://github.com/actionbook/postagent) for HTTP API fetches,
-optionally [`actionbook`](https://github.com/actionbook/actionbook)
-for browser fallback on JS-heavy sites. Neither is required if you only
-use `add-local`.
+and (for JS-heavy pages) the Actionbook Chrome extension — see below.
+Neither is required if you only use `add-local`.
+
+### Browser ingest backends
+
+`ascent-research` picks between two actionbook backends based on
+`ACTIONBOOK_BACKEND` (default `v2-mcp`):
+
+| Env value | Path | What's needed |
+|---|---|---|
+| `v2-mcp` (default) | Cloud MCP at `edge.actionbook.dev/mcp` + Actionbook Chrome extension over WSS | `ACTIONBOOK_API_KEY` (an `ak_*` token), Chrome extension installed & signed in |
+| `v1-cli` | Local `actionbook` CLI subprocess (offline-capable fallback, permanently supported) | The [`actionbook`](https://github.com/actionbook/actionbook) binary on `PATH`, and your Chrome profile reachable by it |
+
+**V2 setup**:
+
+1. Install the **Actionbook Cloud (v2)** Chrome extension (v0.2.0-alpha.4
+   or later). Unpacked-load it from `chrome://extensions` → Load unpacked.
+2. Sign in via the extension popup.
+3. Get an `ak_*` token from [actionbook.dev/dashboard/api-keys](https://actionbook.dev/dashboard/api-keys) and export it:
+   ```bash
+   export ACTIONBOOK_API_KEY=ak_xxxxxxxxxxxxxxxx
+   ```
+   ⚠️ **Do not commit this token to git.** Prefer `.envrc` + direnv or a
+   secret manager. `ascent-research` never echoes the token in error
+   messages or logs.
+
+**Recommended: dedicated Chrome profile.** V2 drives the page through
+`chrome.debugger`, which Chromium will refuse to attach when other
+extensions inject `chrome-extension://` content frames into the target
+page (most password managers, AI sidebars, translation extensions, and
+DevTools extensions do this). Symptom: every browser fetch fails with
+`DEBUGGER_ATTACH_CONFLICT`.
+
+The cleanest fix is a dedicated Chrome profile that only has the
+Actionbook extension installed:
+
+```bash
+# macOS — launch a specific profile directly:
+open -na "Google Chrome" --args --profile-directory="Profile 2"
+```
+
+(Replace `Profile 2` with the directory name shown at `chrome://version`
+in your dedicated profile.)
+
+**Other V2 env vars**:
+
+| Env | Default | Purpose |
+|---|---|---|
+| `ACTIONBOOK_BACKEND` | `v2-mcp` | `v1-cli` to revert to subprocess; unknown values are fatal |
+| `ACTIONBOOK_MCP_ENDPOINT` | `https://edge.actionbook.dev/mcp` | Point at staging or a local worker |
+| `ACTIONBOOK_API_KEY` | — | `ak_*` token (required for v2-mcp) |
+| `ACTIONBOOK_BIN` | `actionbook` | V1 path only; ignored under v2-mcp |
+| `ACTIONBOOK_BROWSER_SESSION` | — | V1: shared session name. V2: tab-handle prefix (lets multiple ascent instances share one Chrome without colliding) |
+| `ACTIONBOOK_STDOUT_CAP` | 16 MB | Cap on per-call response body (both backends) |
 
 ---
 

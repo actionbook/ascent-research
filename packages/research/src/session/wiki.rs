@@ -199,6 +199,62 @@ pub fn list_pages_in(wiki_dir: &std::path::Path) -> Vec<String> {
     out
 }
 
+/// Catalog-seed helper. Writes `<wiki_dir>/<page_slug>.md` with a YAML
+/// frontmatter block + body. Skip semantics:
+///
+/// - file exists + `reseed = false` → `Err(WikiError::AlreadyExists)`
+///   (caller treats this as a silent skip per spec § 去重 / idempotency)
+/// - file exists + `reseed = true` → overwrite
+/// - file missing → create
+///
+/// `frontmatter_lines` is the pre-formatted `key: value` lines that go
+/// inside the `---\n...\n---\n` block. We deliberately don't take a typed
+/// struct because the catalog-seed frontmatter fields don't slot into the
+/// existing `Frontmatter` model (it lacks `host`, `site`, `kind:
+/// actionbook-manual`, etc.) and going through that intermediate would
+/// lose schema-tolerance on unknown keys. The caller (catalog module)
+/// owns the schema.
+pub fn seed_manual_page_in(
+    wiki_dir: &std::path::Path,
+    page_slug: &str,
+    frontmatter_lines: &[(&str, String)],
+    body: &str,
+    reseed: bool,
+) -> Result<PathBuf, WikiError> {
+    validate_slug(page_slug)?;
+    let path = wiki_dir.join(format!("{page_slug}.md"));
+    if path.exists() && !reseed {
+        return Err(WikiError::AlreadyExists(page_slug.to_string()));
+    }
+    fs::create_dir_all(wiki_dir).map_err(|e| WikiError::Io(format!("mkdir wiki/: {e}")))?;
+
+    let mut content = String::with_capacity(256 + body.len());
+    content.push_str("---\n");
+    for (k, v) in frontmatter_lines {
+        content.push_str(k);
+        content.push_str(": ");
+        // Quote ONLY if the value starts with whitespace or contains
+        // a quote — `:` itself is fine because `parse_simple_yaml` uses
+        // `split_once(':')` which keys-on the FIRST colon, so values
+        // like RFC3339 timestamps round-trip without quoting.
+        // The spec § Frontmatter schema renders unquoted: `fetched_at:
+        // 2026-05-17T12:34:56Z`.
+        if v.starts_with(' ') || v.contains('"') || v.contains('\n') {
+            content.push('"');
+            content.push_str(&v.replace('"', "\\\""));
+            content.push('"');
+        } else {
+            content.push_str(v);
+        }
+        content.push('\n');
+    }
+    content.push_str("---\n");
+    content.push_str(body);
+
+    fs::write(&path, &content).map_err(|e| WikiError::Io(format!("write {page_slug}: {e}")))?;
+    Ok(path)
+}
+
 // ── Frontmatter ─────────────────────────────────────────────────────────────
 
 /// Lightweight representation of a wiki page's YAML-ish frontmatter.
@@ -210,6 +266,11 @@ pub struct Frontmatter {
     pub sources: Vec<String>,
     pub related: Vec<String>,
     pub updated: Option<String>,
+    /// Composite source part labels. Empty when the page comes from a
+    /// single-backend source (legacy v0.3 wiki pages parse with an
+    /// empty `parts` vec — additive, no breakage). Spec § "Wiki
+    /// frontmatter 扩展".
+    pub parts: Vec<String>,
     pub extra: Vec<(String, String)>,
 }
 
@@ -237,6 +298,49 @@ pub fn split_frontmatter(body: &str) -> (Frontmatter, &str) {
     (fm, rest)
 }
 
+/// Render a `Frontmatter` value into the on-disk YAML-ish block (without
+/// the surrounding `---` fences). Only emits keys that carry data —
+/// `parts: []` is omitted entirely so single-source wiki pages stay
+/// byte-identical to the v0.3 schema (spec § "Wiki frontmatter 扩展").
+/// `extra` is appended verbatim (key/value pairs) so unknown fields
+/// round-trip through this writer.
+pub fn render_frontmatter_body(fm: &Frontmatter) -> String {
+    let mut out = String::new();
+    if let Some(kind) = &fm.kind {
+        out.push_str(&format!("kind: {kind}\n"));
+    }
+    if !fm.sources.is_empty() {
+        out.push_str(&format!("sources: {}\n", render_yaml_list(&fm.sources)));
+    }
+    if !fm.parts.is_empty() {
+        out.push_str(&format!("parts: {}\n", render_yaml_list(&fm.parts)));
+    }
+    if !fm.related.is_empty() {
+        out.push_str(&format!("related: {}\n", render_yaml_list(&fm.related)));
+    }
+    if let Some(updated) = &fm.updated {
+        out.push_str(&format!("updated: {updated}\n"));
+    }
+    for (k, v) in &fm.extra {
+        out.push_str(&format!("{k}: {v}\n"));
+    }
+    out
+}
+
+fn render_yaml_list(items: &[String]) -> String {
+    let inner: Vec<String> = items
+        .iter()
+        .map(|s| {
+            if s.contains(',') || s.contains('[') || s.contains(']') || s.contains('"') {
+                format!("\"{}\"", s.replace('"', "\\\""))
+            } else {
+                s.clone()
+            }
+        })
+        .collect();
+    format!("[{}]", inner.join(", "))
+}
+
 fn parse_simple_yaml(yaml: &str) -> Frontmatter {
     let mut fm = Frontmatter::default();
     for line in yaml.lines() {
@@ -254,6 +358,11 @@ fn parse_simple_yaml(yaml: &str) -> Frontmatter {
             "updated" => fm.updated = Some(strip_quotes(val).to_string()),
             "sources" => fm.sources = parse_yaml_list(val),
             "related" => fm.related = parse_yaml_list(val),
+            // Composite source parts (spec § "Wiki frontmatter 扩展").
+            // Reuse the inline-list parser — same syntax as `sources`
+            // / `related`. Missing key → leaves `parts` empty, which is
+            // the legacy contract for single-source wiki pages.
+            "parts" => fm.parts = parse_yaml_list(val),
             _ => fm.extra.push((key.to_string(), val.to_string())),
         }
     }

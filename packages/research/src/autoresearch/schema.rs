@@ -35,8 +35,14 @@ pub struct LoopResponse {
 
 /// The fixed action vocabulary. Anything else is rejected with
 /// `ACTION_REJECTED` (non-fatal — the loop keeps going).
+///
+/// `deny_unknown_fields` is set on the enum so any subfield not part of
+/// the declared variant schema (e.g. typos like `surprise:` or
+/// experimental knobs the LLM hallucinates) surfaces as a parse error
+/// rather than silently being dropped. The `type` tag itself is
+/// automatically excluded from the unknown-field check by serde.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     /// Fetch a single URL. Maps to `research add <url>`.
     Add { url: String },
@@ -127,6 +133,44 @@ pub enum Action {
     /// marker so multi-ingest history is visible. Safer default for
     /// incremental updates than `write_wiki_page { replace: true }`.
     AppendWikiPage { slug: String, body: String },
+
+    /// v4 (autoresearch-actionbook-tools): ask the V2 actionbook MCP `search`
+    /// tool to list catalog candidates for a query. Top K hits (K ≤ 5) are
+    /// injected into the next iteration's `recent_actionbook_results`
+    /// prompt field as a compact JSON string. Per-iteration cap = 5.
+    ActionbookSearch {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+    },
+
+    /// v4 (autoresearch-actionbook-tools): pull the full manual for a
+    /// site / group / action triple. Double-effect: (1) markdown body
+    /// (truncated to 8 KB) is injected into next iteration's prompt
+    /// `recent_actionbook_results`; (2) the manual is also seeded into the
+    /// session wiki via `catalog::seed_explicit` (skip on dedupe).
+    /// Per-iteration cap = 5.
+    ActionbookManual {
+        site: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+    },
+
+    /// v4 (autoresearch-actionbook-tools): run an arbitrary Playwright-style
+    /// async function against a URL via the V2 backend (new-tab + run-code
+    /// + close). Returned `{url, title, text, result_json}` is truncated to
+    /// 16 KB and injected into next iteration's prompt
+    /// `recent_actionbook_results`. `timeout_ms` is the inner V2 run-code
+    /// deadline, clamped `[5_000, 60_000]` (default 30_000).
+    /// Per-iteration cap = 3.
+    ActionbookRunCode {
+        url: String,
+        script: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_ms: Option<u64>,
+    },
 }
 
 #[cfg(test)]
@@ -416,6 +460,115 @@ mod tests {
                 assert!(into_section.starts_with("## 02"));
             }
             _ => panic!("expected DigestSource"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_search() {
+        let json = r#"{
+            "reasoning":"discover catalog",
+            "actions":[{"type":"actionbook_search","query":"tweet timeline","host":"x.com"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookSearch { query, host } => {
+                assert_eq!(query, "tweet timeline");
+                assert_eq!(host.as_deref(), Some("x.com"));
+            }
+            other => panic!("expected ActionbookSearch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_search_without_host() {
+        let json = r#"{
+            "reasoning":"discover catalog",
+            "actions":[{"type":"actionbook_search","query":"unbounded"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookSearch { query, host } => {
+                assert_eq!(query, "unbounded");
+                assert!(host.is_none());
+            }
+            other => panic!("expected ActionbookSearch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_manual() {
+        let json = r#"{
+            "reasoning":"pull manual",
+            "actions":[{"type":"actionbook_manual","site":"x_com","group":"search","action":"search_timeline"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookManual { site, group, action } => {
+                assert_eq!(site, "x_com");
+                assert_eq!(group.as_deref(), Some("search"));
+                assert_eq!(action.as_deref(), Some("search_timeline"));
+            }
+            other => panic!("expected ActionbookManual, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_manual_site_only() {
+        let json = r#"{
+            "reasoning":"pull catalog overview",
+            "actions":[{"type":"actionbook_manual","site":"x_com"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookManual { site, group, action } => {
+                assert_eq!(site, "x_com");
+                assert!(group.is_none());
+                assert!(action.is_none());
+            }
+            other => panic!("expected ActionbookManual, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_run_code() {
+        let json = r#"{
+            "reasoning":"scrape",
+            "actions":[{
+                "type":"actionbook_run_code",
+                "url":"https://example.com/",
+                "script":"async (page) => ({ text: 'hi' })",
+                "timeout_ms":30000
+            }],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookRunCode { url, script, timeout_ms } => {
+                assert_eq!(url, "https://example.com/");
+                assert!(script.contains("text: 'hi'"));
+                assert_eq!(*timeout_ms, Some(30000));
+            }
+            other => panic!("expected ActionbookRunCode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_actionbook_run_code_without_timeout() {
+        let json = r#"{
+            "reasoning":"scrape",
+            "actions":[{"type":"actionbook_run_code","url":"https://x/","script":"f"}],
+            "done":false
+        }"#;
+        let r: LoopResponse = serde_json::from_str(json).unwrap();
+        match &r.actions[0] {
+            Action::ActionbookRunCode { timeout_ms, .. } => {
+                assert!(timeout_ms.is_none());
+            }
+            other => panic!("expected ActionbookRunCode, got {other:?}"),
         }
     }
 

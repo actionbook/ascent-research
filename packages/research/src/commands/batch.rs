@@ -25,9 +25,10 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
+use crate::catalog::{self, SeedOpts};
 use crate::fetch::{self, FetchOutcome};
 use crate::output::Envelope;
-use crate::route::{self, Executor as RouteExecutor};
+use crate::route::{self, Executor as RouteExecutor, ResolvedPart};
 use crate::session::{
     active, config,
     event::{RejectReason, RouteDecision, SessionEvent, ToolCallStatus},
@@ -49,6 +50,9 @@ pub fn run(
     no_readable_flag: bool,
     min_bytes_arg: Option<u64>,
     on_short_body_arg: Option<&str>,
+    frame_id: Option<u32>,
+    run_code_args: Option<&str>,
+    reseed: bool,
 ) -> Envelope {
     if urls.is_empty() {
         return Envelope::fail(CMD, "INVALID_ARGUMENT", "no URLs provided (pass ≥ 1)");
@@ -63,6 +67,17 @@ pub fn run(
         Ok(c) => c,
         Err(e) => return Envelope::fail(CMD, "INVALID_ARGUMENT", e),
     };
+
+    // CLI value_parser already validated `run_code_args` is a JSON array
+    // (see cli::parse_run_code_args). Re-parse to a `Value` once, share
+    // via `Arc` across worker threads — same args apply to every URL in
+    // the batch (spec § 已定决策:per-url 覆盖在排除范围).
+    let run_code_args_value: Option<Arc<serde_json::Value>> = run_code_args.map(|s| {
+        Arc::new(
+            serde_json::from_str(s)
+                .expect("clap parse_run_code_args guarantees this is valid JSON array"),
+        )
+    });
 
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -133,10 +148,25 @@ pub fn run(
             }
         };
         let r = classification.route();
+        let is_composite = r.composite.is_some();
         let route_decision = RouteDecision {
-            executor: r.executor.as_str().into(),
+            executor: if is_composite {
+                "composite".into()
+            } else {
+                r.executor.as_str().into()
+            },
             kind: r.kind.clone(),
             command_template: r.command_template.clone(),
+            composite: r.composite.as_ref().map(|parts| {
+                parts
+                    .iter()
+                    .map(|p| crate::session::event::ResolvedPartEvent {
+                        executor: p.executor.as_str().into(),
+                        command: p.command.clone(),
+                        label: p.label.clone(),
+                    })
+                    .collect()
+            }),
         };
 
         let raw_n = next_index;
@@ -166,14 +196,27 @@ pub fn run(
         // in-memory set to collapse rare intra-batch duplicates that slipped
         // past the set check (e.g., variant casing).
         accepted_urls.insert(url.clone());
+        let host_str = extract_host(url).unwrap_or_else(|| "unknown".into());
+
+        // Catalog probe per URL — silent skip on failure. Spec § 已定决策
+        // ("batch 模式下每个 URL 独立 probe,不共享 cache"). Run during
+        // preflight (serial) so wiki writes don't race with worker fetches.
+        let seed_report = catalog::seed_for_url(url, &slug, SeedOpts { reseed });
+        if !seed_report.seeded.is_empty() {
+            catalog::log_seed_events(&slug, url, &host_str, &seed_report);
+        }
+
+        let composite_parts_clone = r.composite.clone();
         jobs.push(Job {
             url: url.clone(),
             decision: route_decision,
             raw_n,
-            host: extract_host(url).unwrap_or_else(|| "unknown".into()),
+            host: host_str,
             kind: r.kind.clone(),
             executor: r.executor,
             readable,
+            is_composite,
+            composite_parts: composite_parts_clone,
         });
         // classification lifetime ends here
         let _ = classification;
@@ -190,6 +233,8 @@ pub fn run(
         let slug_owned = slug.clone();
         let timeout = timeout_ms;
         let cfg = smell_cfg;
+        let frame_id_w = frame_id;
+        let run_code_args_w = run_code_args_value.clone();
         let h = thread::spawn(move || {
             loop {
                 let next = { q.lock().unwrap().pop_front() };
@@ -210,14 +255,17 @@ pub fn run(
                     },
                 );
                 let fetch_start = Instant::now();
-                let (raw_bytes, outcome, executor_str) = fetch::execute(
+                let (raw_bytes, outcome, executor_str) = fetch::execute_with_composite(
                     &job.decision,
+                    job.composite_parts.as_deref(),
                     &slug_owned,
                     job.raw_n,
                     &job.url,
                     job.readable,
                     timeout,
                     cfg,
+                    frame_id_w,
+                    run_code_args_w.as_deref(),
                 );
                 let _ = tx.send(FetchResult {
                     job,
@@ -252,12 +300,22 @@ pub fn run(
         let base = format!("{}-{}-{}", job.raw_n, job.kind, sanitize(&job.host));
 
         if outcome.accepted {
-            let raw_path = raw_dir.join(format!("{base}.json"));
+            let raw_filename = if job.is_composite {
+                format!("{base}.composite.json")
+            } else {
+                format!("{base}.json")
+            };
+            let raw_path = raw_dir.join(&raw_filename);
             if let Err(e) = fs::write(&raw_path, &raw_bytes) {
                 results.push(PerUrl::failed(&job.url, &format!("write raw: {e}")));
                 continue;
             }
-            let trust = trust_score(job.executor, job.readable, outcome.bytes);
+            // Composite trust = max(part trust); single = legacy compute.
+            let trust = if let Some(part_trust) = &outcome.composite_part_trust {
+                part_trust.values().copied().fold(0.0_f64, f64::max)
+            } else {
+                trust_score(job.executor, job.readable, outcome.bytes)
+            };
             let completed = SessionEvent::ToolCallCompleted {
                 timestamp: Utc::now(),
                 call_id,
@@ -288,6 +346,9 @@ pub fn run(
                 bytes: outcome.bytes,
                 trust_score: trust,
                 note: None,
+                composite: if job.is_composite { Some(true) } else { None },
+                parts: outcome.composite_parts.clone(),
+                part_bytes: outcome.composite_part_bytes.clone(),
             };
             if let Err(e) = log::append(&slug, &accepted_ev) {
                 results.push(PerUrl::failed(&job.url, &format!("append accepted: {e}")));
@@ -303,7 +364,12 @@ pub fn run(
                 rel_path(&raw_path),
             ));
         } else {
-            let rejected_path = raw_dir.join(format!("{base}.rejected.json"));
+            let rejected_filename = if job.is_composite {
+                format!("{base}.rejected.composite.json")
+            } else {
+                format!("{base}.rejected.json")
+            };
+            let rejected_path = raw_dir.join(&rejected_filename);
             let _ = fs::write(&rejected_path, &raw_bytes);
             let reason = outcome.reject_reason.unwrap_or(RejectReason::FetchFailed);
             let fetch_success = !matches!(reason, RejectReason::FetchFailed);
@@ -336,6 +402,9 @@ pub fn run(
                 observed_bytes: Some(outcome.observed_bytes),
                 rejected_raw_path: Some(rel_path(&rejected_path)),
                 note: None,
+                composite: if job.is_composite { Some(true) } else { None },
+                parts: outcome.composite_parts.clone(),
+                failed_part: outcome.composite_failed_part.clone(),
             };
             let _ = log::append(&slug, &rejected_ev);
             results.push(PerUrl::rejected(
@@ -384,6 +453,12 @@ struct Job {
     kind: String,
     executor: RouteExecutor,
     readable: bool,
+    /// True when the route is composite — affects raw file naming
+    /// (`.composite.json` vs `.json`) and session.jsonl event shape.
+    is_composite: bool,
+    /// Fan-out parts (template-substituted). `None` for single-backend
+    /// rules. Always `Some` when `is_composite == true`.
+    composite_parts: Option<Vec<ResolvedPart>>,
 }
 
 struct FetchResult {

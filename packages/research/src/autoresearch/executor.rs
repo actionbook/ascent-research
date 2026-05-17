@@ -26,12 +26,42 @@ use serde_json::{Value, json};
 use super::provider::{AgentProvider, ProviderError};
 use super::schema::{Action, LoopResponse};
 use super::svg_safety;
+use crate::catalog;
+use crate::fetch::browser_v2;
 use crate::session::event::{FactCheckOutcome, SessionEvent};
 use crate::session::{config, layout, log};
 
 pub const DEFAULT_ITERATIONS: u32 = 5;
 pub const DEFAULT_MAX_ACTIONS: u32 = 20;
 pub const DIVERGENCE_THRESHOLD: u32 = 3;
+
+// ── Actionbook tools (spec: autoresearch-actionbook-tools) ──────────────────
+
+/// Per-iteration cap on `actionbook_search` actions. Spec § Per-loop caps.
+pub const MAX_ACTIONBOOK_SEARCH_PER_ITER: u32 = 5;
+/// Per-iteration cap on `actionbook_manual` actions. Spec § Per-loop caps.
+pub const MAX_ACTIONBOOK_MANUAL_PER_ITER: u32 = 5;
+/// Per-iteration cap on `actionbook_run_code` actions. Spec § Per-loop caps.
+pub const MAX_ACTIONBOOK_RUNCODE_PER_ITER: u32 = 3;
+
+/// Token budgets (bytes, char-count approximated) per spec § Token budget.
+const ACTIONBOOK_SEARCH_BUDGET_BYTES: usize = 2 * 1024;
+const ACTIONBOOK_MANUAL_BUDGET_BYTES: usize = 8 * 1024;
+const ACTIONBOOK_RUNCODE_TEXT_BUDGET_BYTES: usize = 16 * 1024;
+const ACTIONBOOK_RUNCODE_RESULT_JSON_BUDGET_BYTES: usize = 4 * 1024;
+
+/// `actionbook_run_code` inner V2 `--timeout` clamp range. Spec §
+/// ActionbookRunCode (`timeout_ms` clamped `[5_000, 60_000]`, default
+/// 30_000). Tighter than the fetch path's 85 s — LLM-authored scripts
+/// have higher tail risk.
+const ACTIONBOOK_RUNCODE_TIMEOUT_DEFAULT_MS: u64 = 30_000;
+const ACTIONBOOK_RUNCODE_TIMEOUT_MIN_MS: u64 = 5_000;
+const ACTIONBOOK_RUNCODE_TIMEOUT_MAX_MS: u64 = 60_000;
+
+/// Default outer HTTP envelope timeout for actionbook search/manual calls
+/// (ms). Matches the catalog probe default — these are non-fatal probes
+/// and we don't want to stall the loop indefinitely on a slow MCP edge.
+const ACTIONBOOK_OUTER_TIMEOUT_MS: u64 = 15_000;
 
 #[derive(Debug, Clone)]
 pub struct LoopConfig {
@@ -116,6 +146,11 @@ pub async fn run(
     let mut iterations_run: u32 = 0;
     let mut termination = TerminationReason::IterationsExhausted;
     let mut coverage_history: Vec<String> = Vec::new();
+    // spec § "recent_actionbook_results 仅注入当前 iteration 的结果,不跨
+    // iteration 累积" — produced by iter N actions, consumed by iter N+1
+    // prompt build. Cleared at the START of each iter so old payloads
+    // don't bleed across.
+    let mut pending_actionbook_results: Vec<Value> = Vec::new();
 
     for iter in 1..=cfg.iterations {
         iterations_run = iter;
@@ -125,7 +160,16 @@ pub async fn run(
         let coverage_before = coverage_json(slug, research_bin);
         let unread = collect_unread_sources(slug, 3, 2000);
         let system = system_prompt(slug);
-        let user = user_prompt(slug, &coverage_before, &unread, iter, cfg.iterations);
+        let user = user_prompt(
+            slug,
+            &coverage_before,
+            &unread,
+            iter,
+            cfg.iterations,
+            &pending_actionbook_results,
+        );
+        // Clear after handing off to the prompt — next iter starts fresh.
+        pending_actionbook_results.clear();
 
         // ── Ask provider ──────────────────────────────────────────────
         let raw = match provider.ask(&system, &user).await {
@@ -195,6 +239,13 @@ pub async fn run(
         // ignore when the plan says "fetch on iter 2-3".
         let unread_at_turn_start = unread.len();
 
+        // spec § Per-loop caps: per-iter counters for the 3 actionbook
+        // tools. cap-exceeded becomes a fail-soft reject (counts toward
+        // `actions_rejected_total` + warning, NOT loop fatal).
+        let mut actionbook_search_count: u32 = 0;
+        let mut actionbook_manual_count: u32 = 0;
+        let mut actionbook_runcode_count: u32 = 0;
+
         for action in &response.actions {
             if actions_executed_total + executed_this_round >= cfg.max_actions {
                 termination = TerminationReason::MaxActionsExhausted;
@@ -223,6 +274,44 @@ pub async fn run(
                 rejected_this_round += 1;
                 continue;
             }
+
+            // ── Actionbook tools dispatch (spec: autoresearch-actionbook-tools) ──
+            // Intercepted before dispatch_action so we can: (a) enforce
+            // per-iter caps, (b) inject results into next prompt, (c) log
+            // an ActionbookCalled event regardless of outcome.
+            if let Some(ab_outcome) = handle_actionbook_action(
+                action,
+                slug,
+                iter,
+                cfg.dry_run,
+                &mut actionbook_search_count,
+                &mut actionbook_manual_count,
+                &mut actionbook_runcode_count,
+            ) {
+                if let Some(payload) = ab_outcome.result_payload {
+                    pending_actionbook_results.push(payload);
+                }
+                if ab_outcome.cap_exceeded {
+                    warnings.push(format!(
+                        "action_rejected_iter_{iter}: actionbook_per_loop_cap_exceeded ({})",
+                        ab_outcome.action_type
+                    ));
+                    rejected_this_round += 1;
+                } else if ab_outcome.fail_soft {
+                    warnings.push(format!(
+                        "actionbook_action_failed_{} (iter {iter})",
+                        ab_outcome
+                            .error_code
+                            .as_deref()
+                            .unwrap_or("unknown")
+                    ));
+                    rejected_this_round += 1;
+                } else {
+                    executed_this_round += 1;
+                }
+                continue;
+            }
+
             match dispatch_action(action, slug, iter, cfg.dry_run, research_bin) {
                 Ok(()) => {
                     executed_this_round += 1;
@@ -426,7 +515,8 @@ Rules:
 - "concurrency" in batch is optional; default is 4 if omitted.
 - Section headings must use "## NN · TITLE" format (two-digit number,
   space, middle dot U+00B7, space, TITLE in uppercase).
-- Never propose types outside the list above. Destructive operations
+- Never propose types outside the list above OR the v4 actionbook tools
+  section near the bottom of this prompt. Destructive operations
   (rm, close, delete) are not available.
 - `write_diagram` SVG constraints (enforced — rejection costs a warning):
   size ≤ 512 KB; must start with `<svg` and declare
@@ -578,6 +668,8 @@ For "survey" or "ecosystem" topics, diversify: propose URLs spanning
 alone produce a thin report.
 "###
     .to_string()
+        + "\n\n── Actionbook MCP tools (v4 — autoresearch-actionbook-tools) ──\n\n"
+        + include_str!("prompts/actionbook_tools.md")
 }
 
 fn user_prompt(
@@ -586,8 +678,24 @@ fn user_prompt(
     unread: &[UnreadSource],
     iter: u32,
     total_iters: u32,
+    recent_actionbook_results: &[Value],
 ) -> String {
     let mut out = String::new();
+
+    // v4: surface last iteration's actionbook tool results (if any) at
+    // the top so the LLM uses them this turn. Each entry is a JSON object
+    // produced by the actionbook dispatch (success body, fail-soft error,
+    // or cap-exceeded notice). Empty array = no actionbook calls last
+    // iter (or dry-run).
+    if !recent_actionbook_results.is_empty() {
+        out.push_str(
+            "recent_actionbook_results (results of last turn's actionbook_* actions — review BEFORE emitting more):\n",
+        );
+        let block = serde_json::to_string_pretty(recent_actionbook_results)
+            .unwrap_or_else(|_| "[]".to_string());
+        out.push_str(&block);
+        out.push_str("\n\n");
+    }
 
     // v2: pin the `## Plan` at the top so the agent re-reads the
     // north-star every turn. Absent on first iteration only.
@@ -913,6 +1021,13 @@ fn dispatch_action(
             slug: page_slug,
             body,
         } => append_wiki_page(slug, iteration, page_slug, body),
+        // v4: handled by `handle_actionbook_action` BEFORE this match —
+        // if we get here it's a wiring bug, not a runtime path.
+        Action::ActionbookSearch { .. }
+        | Action::ActionbookManual { .. }
+        | Action::ActionbookRunCode { .. } => Err(
+            "internal: actionbook action reached dispatch_action — should have been intercepted by handle_actionbook_action".into(),
+        ),
     }
 }
 
@@ -1469,6 +1584,637 @@ fn append_step(
             note: None,
         },
     );
+}
+
+// ── Actionbook tools dispatch (spec: autoresearch-actionbook-tools) ───────
+
+/// Outcome of an actionbook action handler. The caller uses this to
+/// update counters, warnings, and the `pending_actionbook_results` queue.
+struct ActionbookOutcome {
+    /// Snake-case action type name (matches the schema tag) — for warnings
+    /// + event logging.
+    action_type: &'static str,
+    /// `recent_actionbook_results` payload to inject into next iter's
+    /// prompt. None means "no payload this turn" (e.g. cap-exceeded).
+    result_payload: Option<Value>,
+    /// True iff this was a cap-rejection (`actions_rejected_total++`).
+    cap_exceeded: bool,
+    /// True iff this was a fail-soft (`actions_rejected_total++`,
+    /// `actionbook_action_failed_<reason>` warning).
+    fail_soft: bool,
+    /// Populated when `fail_soft == true`.
+    error_code: Option<String>,
+}
+
+/// Intercept the 3 actionbook variants. Returns `None` for non-actionbook
+/// actions so the caller falls through to the normal `dispatch_action`
+/// path. Returns `Some` for actionbook variants — caller updates counters
+/// & warnings off the outcome and continues to the next action.
+fn handle_actionbook_action(
+    action: &Action,
+    slug: &str,
+    iter: u32,
+    dry_run: bool,
+    search_count: &mut u32,
+    manual_count: &mut u32,
+    runcode_count: &mut u32,
+) -> Option<ActionbookOutcome> {
+    match action {
+        Action::ActionbookSearch { query, host } => {
+            *search_count += 1;
+            Some(dispatch_actionbook_search(
+                slug,
+                iter,
+                dry_run,
+                query,
+                host.as_deref(),
+                *search_count,
+            ))
+        }
+        Action::ActionbookManual { site, group, action } => {
+            *manual_count += 1;
+            Some(dispatch_actionbook_manual(
+                slug,
+                iter,
+                dry_run,
+                site,
+                group.as_deref(),
+                action.as_deref(),
+                *manual_count,
+            ))
+        }
+        Action::ActionbookRunCode { url, script, timeout_ms } => {
+            *runcode_count += 1;
+            Some(dispatch_actionbook_runcode(
+                slug,
+                iter,
+                dry_run,
+                url,
+                script,
+                *timeout_ms,
+                *runcode_count,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn dispatch_actionbook_search(
+    slug: &str,
+    iter: u32,
+    dry_run: bool,
+    query: &str,
+    host: Option<&str>,
+    invocation_count: u32,
+) -> ActionbookOutcome {
+    let action_type = "actionbook_search";
+    let cmd = build_search_cmd(query, host);
+    let cmd_summary = cmd.trim_start_matches("actionbook ").to_string();
+
+    if invocation_count > MAX_ACTIONBOOK_SEARCH_PER_ITER {
+        return cap_exceeded_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if dry_run {
+        return dry_run_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if let Some(err) = preflight_actionbook() {
+        return fail_soft_outcome(slug, iter, action_type, &cmd_summary, &err.code, &err.message);
+    }
+
+    match browser_v2::call_actionbook_tool(&cmd, slug, ACTIONBOOK_OUTER_TIMEOUT_MS) {
+        Ok(text) => {
+            let hits = extract_text_payload(&text);
+            // Empty result == "search_zero_hits" fail-soft per spec § 失败码映射.
+            let trimmed = hits.trim();
+            if trimmed.is_empty() || trimmed == "[]" {
+                return fail_soft_outcome(
+                    slug,
+                    iter,
+                    action_type,
+                    &cmd_summary,
+                    "search_zero_hits",
+                    "catalog search returned 0 hits",
+                );
+            }
+            let (truncated_body, truncated) = truncate_with_marker(&hits, ACTIONBOOK_SEARCH_BUDGET_BYTES);
+            let payload = json!({
+                "action_type": action_type,
+                "ok": true,
+                "cmd_summary": cmd_summary,
+                "hits": truncated_body,
+                "truncated": truncated,
+            });
+            log_actionbook_called(
+                slug,
+                iter,
+                action_type,
+                &cmd_summary,
+                "ok",
+                truncated_body.len() as u64,
+                truncated,
+                Vec::new(),
+                None,
+            );
+            ActionbookOutcome {
+                action_type,
+                result_payload: Some(payload),
+                cap_exceeded: false,
+                fail_soft: false,
+                error_code: None,
+            }
+        }
+        Err(e) => {
+            let code = classify_mcp_error(&e, "search");
+            fail_soft_outcome(slug, iter, action_type, &cmd_summary, &code, &e)
+        }
+    }
+}
+
+fn dispatch_actionbook_manual(
+    slug: &str,
+    iter: u32,
+    dry_run: bool,
+    site: &str,
+    group: Option<&str>,
+    action_name: Option<&str>,
+    invocation_count: u32,
+) -> ActionbookOutcome {
+    let action_type = "actionbook_manual";
+    let cmd = build_manual_cmd(site, group, action_name);
+    let cmd_summary = cmd.trim_start_matches("actionbook ").to_string();
+
+    if invocation_count > MAX_ACTIONBOOK_MANUAL_PER_ITER {
+        return cap_exceeded_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if dry_run {
+        return dry_run_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if let Some(err) = preflight_actionbook() {
+        return fail_soft_outcome(slug, iter, action_type, &cmd_summary, &err.code, &err.message);
+    }
+
+    match browser_v2::call_actionbook_tool(&cmd, slug, ACTIONBOOK_OUTER_TIMEOUT_MS) {
+        Ok(text) => {
+            let body = strip_mcp_envelope(&text);
+            if body.trim().is_empty() {
+                return fail_soft_outcome(
+                    slug,
+                    iter,
+                    action_type,
+                    &cmd_summary,
+                    "manual_not_found",
+                    "catalog manual returned empty body",
+                );
+            }
+            // Double-effect: (1) inject truncated body into next prompt,
+            // (2) seed wiki via catalog::seed_explicit (silent skip on
+            // dedupe + I/O errors per spec § 风险与缓解).
+            let (truncated_body, truncated) =
+                truncate_with_marker(&body, ACTIONBOOK_MANUAL_BUDGET_BYTES);
+            let host = site.replace('_', ".");
+            let wiki_dir = layout::session_wiki_dir(slug);
+            let seeded_pages: Vec<String> = match catalog::seed_explicit(
+                slug,
+                &wiki_dir,
+                &host,
+                site,
+                group,
+                action_name,
+                &body,
+                catalog::SeedOpts::default(),
+            ) {
+                Some(seeded) => vec![seeded.page_slug],
+                None => Vec::new(),
+            };
+
+            let payload = json!({
+                "action_type": action_type,
+                "ok": true,
+                "cmd_summary": cmd_summary,
+                "site": site,
+                "group": group,
+                "action": action_name,
+                "body": truncated_body,
+                "truncated": truncated,
+            });
+            log_actionbook_called(
+                slug,
+                iter,
+                action_type,
+                &cmd_summary,
+                "ok",
+                truncated_body.len() as u64,
+                truncated,
+                seeded_pages,
+                None,
+            );
+            ActionbookOutcome {
+                action_type,
+                result_payload: Some(payload),
+                cap_exceeded: false,
+                fail_soft: false,
+                error_code: None,
+            }
+        }
+        Err(e) => {
+            let code = classify_mcp_error(&e, "manual");
+            fail_soft_outcome(slug, iter, action_type, &cmd_summary, &code, &e)
+        }
+    }
+}
+
+fn dispatch_actionbook_runcode(
+    slug: &str,
+    iter: u32,
+    dry_run: bool,
+    url: &str,
+    script: &str,
+    timeout_ms: Option<u64>,
+    invocation_count: u32,
+) -> ActionbookOutcome {
+    let action_type = "actionbook_run_code";
+    let clamped = clamp_runcode_timeout(timeout_ms);
+    let handle = browser_v2::handle_for(slug, iter);
+    // cmd_summary: stripped down for jsonl readability — full script bodies
+    // bloat the audit trail without adding signal.
+    let cmd_summary = format!(
+        "run-code url={url} timeout={clamped} script_len={}",
+        script.chars().count()
+    );
+
+    if invocation_count > MAX_ACTIONBOOK_RUNCODE_PER_ITER {
+        return cap_exceeded_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if dry_run {
+        return dry_run_outcome(slug, iter, action_type, &cmd_summary);
+    }
+    if let Some(err) = preflight_actionbook() {
+        return fail_soft_outcome(slug, iter, action_type, &cmd_summary, &err.code, &err.message);
+    }
+
+    // 3-step V2 sequence: new-tab + run-code + close. We use the
+    // module-level `call_actionbook_tool` helper for each step so the
+    // same MCP session-id cache is reused.
+    let goto_cmd = browser_v2::build_new_tab_cmd(url, &handle);
+    let run_cmd = build_user_runcode_cmd(&handle, script, clamped);
+    let close_cmd = browser_v2::build_close_cmd(&handle);
+
+    if let Err(e) = browser_v2::call_actionbook_tool(&goto_cmd, slug, ACTIONBOOK_OUTER_TIMEOUT_MS) {
+        let code = classify_mcp_error(&e, "run_code");
+        return fail_soft_outcome(slug, iter, action_type, &cmd_summary, &code, &e);
+    }
+    let run_text = match browser_v2::call_actionbook_tool(
+        &run_cmd,
+        slug,
+        // Outer envelope must outlive the inner --timeout by at least
+        // the same slack the V2 backend uses (5s).
+        clamped + 5_000,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            // Best-effort close.
+            let _ = browser_v2::call_actionbook_tool(&close_cmd, slug, ACTIONBOOK_OUTER_TIMEOUT_MS);
+            let code = classify_mcp_error(&e, "run_code");
+            return fail_soft_outcome(slug, iter, action_type, &cmd_summary, &code, &e);
+        }
+    };
+    // Best-effort close — failure here doesn't fail the action.
+    let _ = browser_v2::call_actionbook_tool(&close_cmd, slug, ACTIONBOOK_OUTER_TIMEOUT_MS);
+
+    // run-code may return either a JSON envelope (`{url, title, text,
+    // ...}`) or the raw MCP envelope wrapping that JSON. Extract +
+    // partial-truncate the `text` field; cap any extra JSON fields too.
+    let payload_text = strip_mcp_envelope(&run_text);
+    let parsed: Value = serde_json::from_str(payload_text.trim())
+        .unwrap_or_else(|_| json!({ "text": payload_text }));
+    let text_field = parsed
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let (truncated_text, text_truncated) =
+        truncate_with_marker(&text_field, ACTIONBOOK_RUNCODE_TEXT_BUDGET_BYTES);
+
+    // Strip text from the result_json view + truncate the remainder.
+    let mut result_json = parsed.clone();
+    if let Some(obj) = result_json.as_object_mut() {
+        obj.remove("text");
+    }
+    let result_json_str = serde_json::to_string(&result_json).unwrap_or_else(|_| "{}".to_string());
+    let (truncated_result_json, _json_truncated) =
+        truncate_with_marker(&result_json_str, ACTIONBOOK_RUNCODE_RESULT_JSON_BUDGET_BYTES);
+
+    let result_url = parsed.get("url").and_then(Value::as_str).unwrap_or(url);
+    let result_title = parsed.get("title").and_then(Value::as_str).unwrap_or("");
+
+    let payload = json!({
+        "action_type": action_type,
+        "ok": true,
+        "cmd_summary": cmd_summary,
+        "url": result_url,
+        "title": result_title,
+        "text": truncated_text,
+        "result_json": truncated_result_json,
+        "truncated": text_truncated,
+    });
+    log_actionbook_called(
+        slug,
+        iter,
+        action_type,
+        &cmd_summary,
+        "ok",
+        truncated_text.len() as u64,
+        text_truncated,
+        Vec::new(),
+        None,
+    );
+    ActionbookOutcome {
+        action_type,
+        result_payload: Some(payload),
+        cap_exceeded: false,
+        fail_soft: false,
+        error_code: None,
+    }
+}
+
+// ── Actionbook helpers ──────────────────────────────────────────────────
+
+struct PreflightError {
+    code: String,
+    message: String,
+}
+
+/// Run pre-MCP gates that are quick to check + match the catalog probe's
+/// silent-skip semantics: V1 backend, API key missing. Returns `None`
+/// when the gate passes — caller proceeds to dispatch.
+fn preflight_actionbook() -> Option<PreflightError> {
+    if std::env::var("ACTIONBOOK_BACKEND").as_deref() == Ok("v1-cli") {
+        return Some(PreflightError {
+            code: "v1_backend_no_mcp".to_string(),
+            message: "actionbook backend is v1 cli (set ACTIONBOOK_BACKEND=v2-mcp or unset)"
+                .to_string(),
+        });
+    }
+    if !browser_v2::is_api_key_set() {
+        return Some(PreflightError {
+            code: "api_key_missing".to_string(),
+            message: "actionbook api key not set (set ACTIONBOOK_API_KEY=ak_...)".to_string(),
+        });
+    }
+    None
+}
+
+/// Classify a raw MCP error string into one of the spec's failure-code
+/// strings (spec § 失败码映射). Falls back to `mcp_transport_error` for
+/// transport / unknown errors.
+fn classify_mcp_error(raw: &str, op: &str) -> String {
+    let s = raw.to_ascii_uppercase();
+    if s.contains("EXTENSION_OFFLINE") {
+        "extension_offline".to_string()
+    } else if s.contains("SESSION_LOST") || s.contains("TAB_NOT_FOUND") {
+        "session_lost".to_string()
+    } else if s.contains("EVAL_FAILED") && op == "run_code" {
+        "runcode_eval_failed".to_string()
+    } else if s.contains("TIMEOUT") && op == "run_code" {
+        "runcode_timeout".to_string()
+    } else {
+        "mcp_transport_error".to_string()
+    }
+}
+
+fn cap_exceeded_outcome(
+    slug: &str,
+    iter: u32,
+    action_type: &'static str,
+    cmd_summary: &str,
+) -> ActionbookOutcome {
+    let payload = json!({
+        "action_type": action_type,
+        "ok": false,
+        "error": "cap_exceeded",
+        "recoverable": true,
+        "cmd_summary": cmd_summary,
+    });
+    log_actionbook_called(
+        slug,
+        iter,
+        action_type,
+        cmd_summary,
+        "cap_exceeded",
+        0,
+        false,
+        Vec::new(),
+        Some("cap_exceeded".to_string()),
+    );
+    ActionbookOutcome {
+        action_type,
+        result_payload: Some(payload),
+        cap_exceeded: true,
+        fail_soft: false,
+        error_code: Some("cap_exceeded".to_string()),
+    }
+}
+
+fn dry_run_outcome(
+    slug: &str,
+    iter: u32,
+    action_type: &'static str,
+    cmd_summary: &str,
+) -> ActionbookOutcome {
+    println!("[dry-run] {action_type} {cmd_summary}");
+    log_actionbook_called(
+        slug,
+        iter,
+        action_type,
+        cmd_summary,
+        "dry_run",
+        0,
+        false,
+        Vec::new(),
+        None,
+    );
+    ActionbookOutcome {
+        action_type,
+        result_payload: None,
+        cap_exceeded: false,
+        fail_soft: false,
+        error_code: None,
+    }
+}
+
+fn fail_soft_outcome(
+    slug: &str,
+    iter: u32,
+    action_type: &'static str,
+    cmd_summary: &str,
+    error_code: &str,
+    message: &str,
+) -> ActionbookOutcome {
+    // Spec § 失败码映射: human-readable error strings injected into the
+    // LLM's recent_actionbook_results so it can adapt next turn.
+    let friendly = friendly_error_message(error_code, message);
+    let payload = json!({
+        "action_type": action_type,
+        "ok": false,
+        "error": friendly,
+        "error_code": error_code,
+        "recoverable": true,
+        "cmd_summary": cmd_summary,
+    });
+    log_actionbook_called(
+        slug,
+        iter,
+        action_type,
+        cmd_summary,
+        "fail_soft",
+        0,
+        false,
+        Vec::new(),
+        Some(error_code.to_string()),
+    );
+    ActionbookOutcome {
+        action_type,
+        result_payload: Some(payload),
+        cap_exceeded: false,
+        fail_soft: true,
+        error_code: Some(error_code.to_string()),
+    }
+}
+
+/// Map spec error_code to a short human-readable phrase that the spec's
+/// integration tests assert on (e.g. "chrome extension offline", "api key
+/// not set", "backend is v1 cli"). When no canned phrase exists, fall
+/// back to the raw message lowercased.
+fn friendly_error_message(error_code: &str, fallback: &str) -> String {
+    match error_code {
+        "extension_offline" => "chrome extension offline".to_string(),
+        "api_key_missing" => "actionbook api key not set".to_string(),
+        "v1_backend_no_mcp" => "actionbook backend is v1 cli (no MCP)".to_string(),
+        "search_zero_hits" => "catalog search returned 0 hits".to_string(),
+        "manual_not_found" => "catalog manual not found for that site/group/action".to_string(),
+        "runcode_eval_failed" => "run-code script evaluation failed in the page".to_string(),
+        "runcode_timeout" => "run-code script timed out".to_string(),
+        "session_lost" => "actionbook session lost; retry next iteration".to_string(),
+        "mcp_transport_error" => format!("mcp transport error: {}", fallback.to_ascii_lowercase()),
+        _ => fallback.to_string(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_actionbook_called(
+    slug: &str,
+    iter: u32,
+    action_type: &str,
+    cmd_summary: &str,
+    outcome: &str,
+    result_bytes: u64,
+    result_truncated: bool,
+    wiki_seeded_pages: Vec<String>,
+    error_code: Option<String>,
+) {
+    let _ = log::append(
+        slug,
+        &SessionEvent::ActionbookCalled {
+            timestamp: Utc::now(),
+            iteration: iter,
+            action_type: action_type.to_string(),
+            cmd_summary: cmd_summary.to_string(),
+            outcome: outcome.to_string(),
+            result_bytes,
+            result_truncated,
+            wiki_seeded_pages,
+            error_code,
+            note: None,
+        },
+    );
+}
+
+/// Build the cmd string for an `actionbook_search` action. Matches the
+/// catalog probe's exact shape (`actionbook search "..." --host ...`) so
+/// the V2 server tool resolves the same handler.
+fn build_search_cmd(query: &str, host: Option<&str>) -> String {
+    let mut s = format!("actionbook search \"{query}\"");
+    if let Some(h) = host {
+        s.push_str(&format!(" --host {h}"));
+    }
+    s
+}
+
+/// Build the cmd string for an `actionbook_manual` action.
+fn build_manual_cmd(site: &str, group: Option<&str>, action: Option<&str>) -> String {
+    let mut s = format!("actionbook manual {site}");
+    if let Some(g) = group {
+        s.push(' ');
+        s.push_str(g);
+    }
+    if let Some(a) = action {
+        s.push(' ');
+        s.push_str(a);
+    }
+    s
+}
+
+/// Clamp the LLM-requested `timeout_ms` for `actionbook_run_code` per spec
+/// § ActionbookRunCode (default 30_000, range `[5_000, 60_000]`).
+pub fn clamp_runcode_timeout(requested: Option<u64>) -> u64 {
+    let raw = requested.unwrap_or(ACTIONBOOK_RUNCODE_TIMEOUT_DEFAULT_MS);
+    raw.clamp(
+        ACTIONBOOK_RUNCODE_TIMEOUT_MIN_MS,
+        ACTIONBOOK_RUNCODE_TIMEOUT_MAX_MS,
+    )
+}
+
+/// Build the cmd string for the user-supplied run-code script. Unlike the
+/// V2 backend's `build_runcode_cmd` (which wraps a fixed inline JS), this
+/// passes the LLM's script through verbatim — they get full Playwright
+/// access. Single-quote escaping mirrors `browser_v2::build_runcode_cmd`.
+pub fn build_user_runcode_cmd(handle: &str, script: &str, timeout_ms: u64) -> String {
+    let escaped = script.replace('\'', "\\'");
+    format!("browser run-code --tab {handle} --timeout {timeout_ms} '{escaped}'")
+}
+
+/// Truncate `s` to at most `max` BYTES, appending the spec's marker
+/// (`[…truncated to <N>KB…]`) when truncation actually occurs. Returns
+/// `(maybe_truncated, did_truncate)`. Backs off to the nearest char
+/// boundary so we never split UTF-8.
+fn truncate_with_marker(s: &str, max: usize) -> (String, bool) {
+    if s.len() <= max {
+        return (s.to_string(), false);
+    }
+    let kb = max / 1024;
+    let marker = format!("\n\n[…truncated to {kb}KB…]");
+    // Reserve room for the marker.
+    let budget = max.saturating_sub(marker.len());
+    let mut end = budget.min(s.len());
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(max);
+    out.push_str(&s[..end]);
+    out.push_str(&marker);
+    (out, true)
+}
+
+/// MCP envelope stripper for tool text payloads. Mirrors
+/// `catalog::extract_manual_body` exactly so behavior is consistent.
+fn strip_mcp_envelope(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() >= 3
+        && lines[0].starts_with('[')
+        && lines[0].ends_with(']')
+        && (lines[1].starts_with("ok ") || lines[1].starts_with("error "))
+    {
+        return lines[2..].join("\n");
+    }
+    text.to_string()
+}
+
+/// Extract the raw text payload from a `search` tool response — same
+/// envelope shape as `manual`, but we don't want to strip the JSON array
+/// markers, so we use this thin wrapper that delegates to the envelope
+/// stripper.
+fn extract_text_payload(text: &str) -> String {
+    strip_mcp_envelope(text)
 }
 
 // ── Unit tests ──────────────────────────────────────────────────────────

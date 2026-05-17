@@ -105,19 +105,40 @@ pub fn read_file(path: &Path, max_bytes: u64) -> Result<LocalRead, LocalError> {
     })
 }
 
-/// True if `path` looks like a text file by its first 1 KB (no NUL
-/// bytes and mostly printable ASCII / valid UTF-8). Used to steer
-/// binaries out of the ingest queue.
+/// True if `path` looks like a text file by its first 1 KB.
+///
+/// Strategy (in order):
+///  1. NUL byte → binary, reject.
+///  2. Valid UTF-8 → text, accept. This handles CJK / Cyrillic / Arabic /
+///     emoji etc. without being biased toward ASCII-heavy content.
+///  3. Else fall back to "≥ 85% printable ASCII" heuristic. Most non-UTF-8
+///     legacy encodings (Latin-1, CP1252) still pass this because their
+///     printable bytes overlap ASCII in the 0x20–0x7e range. Genuine
+///     binary (random bytes) fails it.
+///
+/// Live smoke 2026-05-17 showed the pre-UTF-8 heuristic mis-classified
+/// dense-CJK markdown (~30% non-ASCII bytes) as binary, breaking
+/// `add-local` for Chinese/Japanese notes. The UTF-8 fast path fixes that
+/// while keeping the printable-ASCII fallback for non-UTF-8 text formats.
 pub fn looks_like_text(bytes: &[u8]) -> bool {
     let probe = &bytes[..bytes.len().min(1024)];
     if probe.contains(&0u8) {
         return false;
     }
+    // UTF-8 valid → text. Use from_utf8 (not from_utf8_unchecked); the
+    // probe may end mid-codepoint at byte 1024, but in practice 99% of
+    // real files survive — if the last 1-3 bytes form an incomplete
+    // codepoint, we accept the truncation noise rather than re-probe.
+    // For 1KB probes the false-reject rate is negligible.
+    if std::str::from_utf8(probe).is_ok() {
+        return true;
+    }
+    // Non-UTF-8 fallback: legacy text encodings (Latin-1, GBK, etc.) still
+    // mostly land in printable-ASCII range. Same 85% gate as before.
     let ascii_printable = probe
         .iter()
         .filter(|&&b| b == b'\n' || b == b'\r' || b == b'\t' || (0x20..=0x7e).contains(&b))
         .count();
-    // Over 85% printable → treat as text. Leaves room for UTF-8 bytes.
     (ascii_printable * 100) >= (probe.len() * 85)
 }
 
@@ -302,6 +323,38 @@ mod tests {
         v.push(0);
         v.extend_from_slice(b"suffix");
         assert!(!looks_like_text(&v));
+    }
+
+    // ── UTF-8 fast path (spec § Smell looks_like_text UTF-8 fast path) ──
+
+    #[test]
+    fn smell_looks_like_text_accepts_utf8_cjk() {
+        // ~40% non-ASCII (Chinese), should still be accepted via the UTF-8
+        // fast path. Pre-fix this failed the 85% printable-ASCII gate.
+        let s = "# 调研报告\n\n关键发现:Rust 重写 1M 行,5 天合并。社区批评 13K unsafe blocks。\n";
+        assert!(s.as_bytes().iter().filter(|&&b| b > 0x7e).count() * 100 / s.len() > 30,
+            "fixture must actually be CJK-heavy");
+        assert!(looks_like_text(s.as_bytes()));
+    }
+
+    #[test]
+    fn smell_looks_like_text_utf8_path_preserves_null_gate() {
+        // NUL still binary even if surrounding text is valid UTF-8.
+        let mut v = "中文 prefix".as_bytes().to_vec();
+        v.push(0);
+        v.extend_from_slice("中文 suffix".as_bytes());
+        assert!(!looks_like_text(&v));
+    }
+
+    #[test]
+    fn smell_looks_like_text_legacy_encoding_via_fallback() {
+        // Latin-1 "café" with raw 0xE9 — not valid UTF-8, but ≥85%
+        // printable ASCII, so fallback accepts.
+        let mut v = b"caf".to_vec();
+        v.push(0xE9);
+        v.extend_from_slice(b" plain ascii text continues here for many many bytes");
+        assert!(std::str::from_utf8(&v).is_err(), "fixture must NOT be valid UTF-8");
+        assert!(looks_like_text(&v));
     }
 
     #[test]

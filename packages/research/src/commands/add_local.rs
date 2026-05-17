@@ -115,8 +115,11 @@ pub fn run(
             None,  // default timeout
             false, // readable — meaningless for local
             false,
-            None, // min-bytes — use default
-            None, // on-short-body — default reject
+            None,  // min-bytes — use default
+            None,  // on-short-body — default reject
+            None,  // frame-id — local executor ignores
+            None,  // run-code-args — local executor ignores
+            false, // reseed — catalog probe is a no-op on file:// URLs
         );
         if env.ok {
             if let Some(original_url) = original_url {

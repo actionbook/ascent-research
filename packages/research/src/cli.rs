@@ -96,6 +96,21 @@ pub enum Commands {
         /// Short-body behavior: "reject" (default) or "warn".
         #[arg(long = "on-short-body")]
         on_short_body: Option<String>,
+        /// V2-only: run the inline JS inside the given iframe (OOPIF
+        /// support). Default = top frame. Requires
+        /// `ACTIONBOOK_BACKEND=v2-mcp` (default). Must be >= 0.
+        #[arg(long = "frame-id", allow_hyphen_values = true, value_parser = parse_frame_id)]
+        frame_id: Option<u32>,
+        /// V2-only: JSON array forwarded to the inline JS as `$args`.
+        /// Requires `ACTIONBOOK_BACKEND=v2-mcp` (default). Must be a JSON
+        /// array (empty `[]` is allowed; non-array JSON is rejected).
+        #[arg(long = "run-code-args", value_parser = parse_run_code_args)]
+        run_code_args: Option<String>,
+        /// Force re-fetch of any catalog-seeded wiki manuals (overwrite
+        /// existing pages with fresh `fetched_at`). Default is skip-if-
+        /// exists; see `specs/actionbook-catalog-seed.spec.md`.
+        #[arg(long)]
+        reseed: bool,
     },
     /// Bulk-ingest a local file or directory tree as sources.
     ///
@@ -162,6 +177,21 @@ pub enum Commands {
         /// Short-body behavior: "reject" (default) or "warn".
         #[arg(long = "on-short-body")]
         on_short_body: Option<String>,
+        /// V2-only: run the inline JS inside the given iframe for every
+        /// URL in the batch. Default = top frame. Requires
+        /// `ACTIONBOOK_BACKEND=v2-mcp` (default). Must be >= 0.
+        #[arg(long = "frame-id", allow_hyphen_values = true, value_parser = parse_frame_id)]
+        frame_id: Option<u32>,
+        /// V2-only: JSON array forwarded to the inline JS as `$args` for
+        /// every URL in the batch (shared, not per-url). Requires
+        /// `ACTIONBOOK_BACKEND=v2-mcp` (default). Must be a JSON array.
+        #[arg(long = "run-code-args", value_parser = parse_run_code_args)]
+        run_code_args: Option<String>,
+        /// Force re-fetch of any catalog-seeded wiki manuals (overwrite
+        /// existing pages). Applies to every URL in the batch. See
+        /// `specs/actionbook-catalog-seed.spec.md`.
+        #[arg(long)]
+        reseed: bool,
     },
     /// Synthesize session.md + raw/ into report.json + report.html.
     Synthesize {
@@ -352,6 +382,49 @@ pub enum WikiCmd {
     },
 }
 
+/// Clap value parser for `--frame-id`. We accept the value as a signed
+/// integer first so a negative value produces a helpful "must be >= 0"
+/// error string (spec § 验收标准 / `add_cli_rejects_negative_frame_id`).
+/// `allow_hyphen_values` on the field lets `-1` reach this parser
+/// instead of being mis-interpreted as another flag.
+fn parse_frame_id(s: &str) -> Result<u32, String> {
+    let v: i64 = s.parse().map_err(|_| {
+        format!("'--frame-id' value '{s}' is not a valid integer (frame-id must be >= 0)")
+    })?;
+    if v < 0 {
+        return Err(format!("frame-id must be >= 0 (got {v})"));
+    }
+    u32::try_from(v).map_err(|_| format!("frame-id too large: {v}"))
+}
+
+/// Clap value parser for `--run-code-args`. The CLI layer enforces
+/// "must parse as a JSON array" (spec § 验收标准 — two distinct error
+/// shapes:malformed JSON vs valid-but-non-array JSON). Returns the
+/// original string on success; the JSON value is re-parsed downstream in
+/// the command handler when we hand it to `fetch::execute`.
+fn parse_run_code_args(s: &str) -> Result<String, String> {
+    let v: serde_json::Value = serde_json::from_str(s)
+        .map_err(|e| format!("invalid JSON for --run-code-args: {e} (expected JSON array)"))?;
+    if !v.is_array() {
+        return Err(format!(
+            "--run-code-args must be a JSON array (got {})",
+            json_type_name(&v)
+        ));
+    }
+    Ok(s.to_string())
+}
+
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 /// Entry point used by `main.rs`. Returns the process exit code.
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
@@ -429,6 +502,9 @@ fn dispatch(cmd: Commands) -> Envelope {
             no_readable,
             min_bytes,
             on_short_body,
+            frame_id,
+            run_code_args,
+            reseed,
         } => commands::add::run(
             &url,
             slug.as_deref(),
@@ -437,6 +513,9 @@ fn dispatch(cmd: Commands) -> Envelope {
             no_readable,
             min_bytes,
             on_short_body.as_deref(),
+            frame_id,
+            run_code_args.as_deref(),
+            reseed,
         ),
         Commands::AddLocal {
             path,
@@ -467,6 +546,9 @@ fn dispatch(cmd: Commands) -> Envelope {
             no_readable,
             min_bytes,
             on_short_body,
+            frame_id,
+            run_code_args,
+            reseed,
         } => commands::batch::run(
             &urls,
             slug.as_deref(),
@@ -476,6 +558,9 @@ fn dispatch(cmd: Commands) -> Envelope {
             no_readable,
             min_bytes,
             on_short_body.as_deref(),
+            frame_id,
+            run_code_args.as_deref(),
+            reseed,
         ),
         Commands::Synthesize {
             slug,

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
+use crate::catalog::{self, SeedOpts};
 use crate::fetch::{
     self,
     smell::{ShortBodyMode, SmellConfig},
@@ -16,8 +17,14 @@ use crate::session::{
 };
 
 const CMD: &str = "research add";
-const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+// 30 s was fine for V1 CLI subprocess + static pages, but V2's three-stage
+// SPA wait (DOMContentLoaded 8s + networkidle 3s + body-content poll 5s)
+// can reach ~16s on its own, and a real SPA can exceed that on cold
+// caches. 90 s gives caller-side ureq + V2-side runcode comfortable
+// headroom under the V2 server max of 115 s. Override with `--timeout`.
+const DEFAULT_TIMEOUT_MS: u64 = 90_000;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     url: &str,
     slug_arg: Option<&str>,
@@ -26,6 +33,9 @@ pub fn run(
     no_readable_flag: bool,
     min_bytes_arg: Option<u64>,
     on_short_body_arg: Option<&str>,
+    frame_id: Option<u32>,
+    run_code_args: Option<&str>,
+    reseed: bool,
 ) -> Envelope {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -81,6 +91,9 @@ pub fn run(
             observed_bytes: None,
             rejected_raw_path: None,
             note: None,
+            composite: None,
+            parts: None,
+            failed_part: None,
         };
         let _ = log::append(&slug, &ev);
         return Envelope::fail(
@@ -94,6 +107,7 @@ pub fn run(
                 executor: "n/a".into(),
                 kind: "duplicate".into(),
                 command_template: "".into(),
+                composite: None,
             },
             RejectReason::Duplicate,
             0,
@@ -117,10 +131,28 @@ pub fn run(
         Err(msg) => return Envelope::fail(CMD, "INVALID_ARGUMENT", msg),
     };
     let r = classification.route();
+    // For composite rules, the session.jsonl `route_decision` carries the
+    // full part list so audit / replay can reconstruct the exact fan-out
+    // intent. For single-backend rules we keep the legacy shape (no
+    // `composite` field — byte-for-byte unchanged jsonl).
     let route_decision = RouteDecision {
-        executor: r.executor.as_str().into(),
+        executor: if r.composite.is_some() {
+            "composite".into()
+        } else {
+            r.executor.as_str().into()
+        },
         kind: r.kind.clone(),
         command_template: r.command_template.clone(),
+        composite: r.composite.as_ref().map(|parts| {
+            parts
+                .iter()
+                .map(|p| crate::session::event::ResolvedPartEvent {
+                    executor: p.executor.as_str().into(),
+                    command: p.command.clone(),
+                    label: p.label.clone(),
+                })
+                .collect()
+        }),
     };
 
     let raw_n = log::next_raw_index(&existing);
@@ -144,6 +176,13 @@ pub fn run(
         }
     };
 
+    // Catalog probe BEFORE fetch. Failure here is silent and never blocks
+    // the main fetch flow — see `specs/actionbook-catalog-seed.spec.md`.
+    let seed_report = catalog::seed_for_url(url, &slug, SeedOpts { reseed });
+    if !seed_report.seeded.is_empty() {
+        catalog::log_seed_events(&slug, url, &host, &seed_report);
+    }
+
     let fetch_start = std::time::Instant::now();
     let call_id = format!("fetch-{raw_n}");
     let started = SessionEvent::ToolCallStarted {
@@ -157,14 +196,26 @@ pub fn run(
     if let Err(e) = log::append(&slug, &started) {
         return Envelope::fail(CMD, "IO_ERROR", format!("append tool_call_started: {e}"));
     }
-    let (raw_bytes, outcome, executor_str) = fetch::execute(
+    // `run_code_args` reaches us as the original CLI string; clap's
+    // value_parser has already validated it parses as a JSON array, but
+    // we re-parse here because `fetch::execute` wants the structured
+    // `serde_json::Value`. The `expect()` is safe — clap already rejected
+    // anything that wouldn't parse.
+    let run_code_args_value: Option<Value> = run_code_args.map(|s| {
+        serde_json::from_str(s)
+            .expect("clap parse_run_code_args guarantees this is valid JSON array")
+    });
+    let (raw_bytes, outcome, executor_str) = fetch::execute_with_composite(
         &route_decision,
+        r.composite.as_deref(),
         &slug,
         raw_n,
         url,
         readable,
         timeout_ms,
         smell_cfg,
+        frame_id,
+        run_code_args_value.as_ref(),
     );
     let duration_ms = fetch_start.elapsed().as_millis() as u64;
 
@@ -179,12 +230,23 @@ pub fn run(
     );
 
     if outcome.accepted {
-        let raw_path = raw_dir.join(format!("{base}.json"));
+        let is_composite = r.composite.is_some();
+        let raw_filename = if is_composite {
+            format!("{base}.composite.json")
+        } else {
+            format!("{base}.json")
+        };
+        let raw_path = raw_dir.join(&raw_filename);
         if let Err(e) = fs::write(&raw_path, &raw_bytes) {
             return Envelope::fail(CMD, "IO_ERROR", format!("write raw: {e}"));
         }
 
-        let trust = trust_score(r.executor, readable, outcome.bytes);
+        // Composite trust = max(part trust); single = legacy compute.
+        let trust = if let Some(part_trust) = &outcome.composite_part_trust {
+            part_trust.values().copied().fold(0.0_f64, f64::max)
+        } else {
+            trust_score(r.executor, readable, outcome.bytes)
+        };
         let completed = SessionEvent::ToolCallCompleted {
             timestamp: Utc::now(),
             call_id,
@@ -211,6 +273,9 @@ pub fn run(
             bytes: outcome.bytes,
             trust_score: trust,
             note: None,
+            composite: if is_composite { Some(true) } else { None },
+            parts: outcome.composite_parts.clone(),
+            part_bytes: outcome.composite_part_bytes.clone(),
         };
         if let Err(e) = log::append(&slug, &accepted_ev) {
             return Envelope::fail(CMD, "IO_ERROR", format!("append accepted: {e}"));
@@ -249,7 +314,13 @@ pub fn run(
         .with_context(json!({ "session": slug, "url": url }));
     }
 
-    let rejected_path = raw_dir.join(format!("{base}.rejected.json"));
+    let is_composite = r.composite.is_some();
+    let rejected_filename = if is_composite {
+        format!("{base}.rejected.composite.json")
+    } else {
+        format!("{base}.rejected.json")
+    };
+    let rejected_path = raw_dir.join(&rejected_filename);
     let _ = fs::write(&rejected_path, &raw_bytes);
 
     let reason = outcome.reject_reason.unwrap_or(RejectReason::FetchFailed);
@@ -283,6 +354,9 @@ pub fn run(
         observed_bytes: Some(outcome.observed_bytes),
         rejected_raw_path: Some(rel_path(&rejected_path)),
         note: None,
+        composite: if is_composite { Some(true) } else { None },
+        parts: outcome.composite_parts.clone(),
+        failed_part: outcome.composite_failed_part.clone(),
     };
     let _ = log::append(&slug, &rejected_ev);
 

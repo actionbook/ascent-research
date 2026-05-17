@@ -57,8 +57,27 @@ pub struct RuleSpec {
     pub path_segments: Option<Vec<String>>,
     #[serde(default)]
     pub query_param: Option<HashMap<String, String>>,
+    /// Single-backend executor. Mutually exclusive with `composite` (spec §
+    /// "composite 与 executor 互斥"). Required when `composite` is absent.
+    #[serde(default)]
+    pub executor: Option<String>,
+    /// Single-backend command template. Required when `composite` is absent;
+    /// must be absent when `composite` is present.
+    #[serde(default)]
+    pub template: Option<String>,
+    /// Composite fan-out parts. Each part is its own (executor, template,
+    /// label) tuple. Mutually exclusive with top-level `executor` + `template`.
+    /// Minimum 2 parts; labels must be unique within a rule and match
+    /// `[a-z][a-z0-9_]*`. Spec § "composite schema".
+    #[serde(default)]
+    pub composite: Option<Vec<CompositePartSpec>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompositePartSpec {
     pub executor: String,
     pub template: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,8 +102,22 @@ pub struct CompiledRule {
     pub host: String,
     pub path_matcher: PathMatcher,
     pub query_regexes: Vec<(String, Regex)>,
+    /// Single-backend executor + template, or composite fan-out parts.
+    /// Exactly one variant is set (enforced at load time).
+    pub backend: RuleBackend,
+}
+
+#[derive(Debug, Clone)]
+pub enum RuleBackend {
+    Single { executor: String, template: String },
+    Composite(Vec<CompositePart>),
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositePart {
     pub executor: String,
     pub template: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +174,19 @@ pub struct Route {
     pub kind: String,
     pub command_template: String,
     pub url: String,
+    /// When `Some`, this route is composite — the fetch layer fans out to
+    /// each part sequentially and merges into a single source artifact.
+    /// Templates are pre-substituted at classify time. Spec §
+    /// "Fan-out 策略 — 顺序串行".
+    pub composite: Option<Vec<ResolvedPart>>,
+}
+
+/// A composite part after template placeholder substitution.
+#[derive(Debug, Clone)]
+pub struct ResolvedPart {
+    pub executor: Executor,
+    pub command: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone)]
@@ -389,42 +435,168 @@ fn compile_rule(r: &RuleSpec, idx: usize, src: Option<&str>) -> Result<CompiledR
         }
     }
 
-    // Placeholder binding check
+    // Placeholder binding helper used for each backend's templates.
     let bound = bound_placeholders(&path_matcher, &query_regexes);
-    let used = extract_placeholders(&r.template);
-    for placeholder in &used {
-        if !bound.contains(placeholder) && !is_universal(placeholder) {
+    let check_placeholders = |template: &str, label_for_err: Option<&str>| -> Result<(), PresetError> {
+        let used = extract_placeholders(template);
+        for placeholder in &used {
+            if !bound.contains(placeholder) && !is_universal(placeholder) {
+                let part_tag = match label_for_err {
+                    Some(l) => format!(" composite part `{l}`"),
+                    None => String::new(),
+                };
+                return Err(PresetError {
+                    sub_code: PresetSubCode::PlaceholderUnbound,
+                    message: format!(
+                        "rule[{idx}] (kind={}){part_tag} template has `{{{placeholder}}}` but it isn't in \
+                        path_segments, query_param, or universal {{url,host,path}}",
+                        r.kind
+                    ),
+                    path: src.map(String::from),
+                });
+            }
+        }
+        Ok(())
+    };
+
+    // ── Composite vs single mutual exclusion (spec § "composite 与 executor 互斥") ──
+    let has_top_executor = r.executor.is_some() || r.template.is_some();
+    let backend = match (&r.composite, has_top_executor) {
+        (Some(_), true) => {
             return Err(PresetError {
-                sub_code: PresetSubCode::PlaceholderUnbound,
+                sub_code: PresetSubCode::SchemaInvalid,
                 message: format!(
-                    "rule[{idx}] (kind={}) template has `{{{placeholder}}}` but it isn't in \
-                    path_segments, query_param, or universal {{url,host,path}}",
+                    "rule[{idx}] (kind={}) cannot set both top-level `executor` and `composite` \
+                    — use one OR the other (single-backend or composite fan-out)",
                     r.kind
                 ),
                 path: src.map(String::from),
             });
         }
-    }
-
-    if Executor::parse(&r.executor).is_none() {
-        return Err(PresetError {
-            sub_code: PresetSubCode::SchemaInvalid,
-            message: format!(
-                "rule[{idx}] (kind={}) executor must be 'postagent' or 'browser', got '{}'",
-                r.kind, r.executor
-            ),
-            path: src.map(String::from),
-        });
-    }
+        (Some(parts), false) => {
+            if parts.len() < 2 {
+                return Err(PresetError {
+                    sub_code: PresetSubCode::SchemaInvalid,
+                    message: format!(
+                        "rule[{idx}] (kind={}) composite must have at least 2 parts (got {}); \
+                        for 1 part, use top-level `executor` + `template`",
+                        r.kind,
+                        parts.len()
+                    ),
+                    path: src.map(String::from),
+                });
+            }
+            // Validate each part's executor + label charset; ensure labels
+            // are unique within this composite.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut compiled_parts = Vec::with_capacity(parts.len());
+            for p in parts {
+                if Executor::parse(&p.executor).is_none() {
+                    return Err(PresetError {
+                        sub_code: PresetSubCode::SchemaInvalid,
+                        message: format!(
+                            "rule[{idx}] (kind={}) composite part `{}` executor must be \
+                            'postagent' or 'browser', got '{}'",
+                            r.kind, p.label, p.executor
+                        ),
+                        path: src.map(String::from),
+                    });
+                }
+                if !is_valid_label(&p.label) {
+                    return Err(PresetError {
+                        sub_code: PresetSubCode::SchemaInvalid,
+                        message: format!(
+                            "rule[{idx}] (kind={}) composite part label '{}' must match \
+                            [a-z][a-z0-9_]*",
+                            r.kind, p.label
+                        ),
+                        path: src.map(String::from),
+                    });
+                }
+                if !seen.insert(p.label.clone()) {
+                    return Err(PresetError {
+                        sub_code: PresetSubCode::SchemaInvalid,
+                        message: format!(
+                            "rule[{idx}] (kind={}) composite part label '{}' is duplicated; \
+                            labels must be unique within a composite rule",
+                            r.kind, p.label
+                        ),
+                        path: src.map(String::from),
+                    });
+                }
+                check_placeholders(&p.template, Some(&p.label))?;
+                compiled_parts.push(CompositePart {
+                    executor: p.executor.clone(),
+                    template: p.template.clone(),
+                    label: p.label.clone(),
+                });
+            }
+            RuleBackend::Composite(compiled_parts)
+        }
+        (None, true) => {
+            let executor = r.executor.as_deref().ok_or_else(|| PresetError {
+                sub_code: PresetSubCode::SchemaInvalid,
+                message: format!(
+                    "rule[{idx}] (kind={}) `template` set without `executor`",
+                    r.kind
+                ),
+                path: src.map(String::from),
+            })?;
+            let template = r.template.as_deref().ok_or_else(|| PresetError {
+                sub_code: PresetSubCode::SchemaInvalid,
+                message: format!(
+                    "rule[{idx}] (kind={}) `executor` set without `template`",
+                    r.kind
+                ),
+                path: src.map(String::from),
+            })?;
+            if Executor::parse(executor).is_none() {
+                return Err(PresetError {
+                    sub_code: PresetSubCode::SchemaInvalid,
+                    message: format!(
+                        "rule[{idx}] (kind={}) executor must be 'postagent' or 'browser', got '{}'",
+                        r.kind, executor
+                    ),
+                    path: src.map(String::from),
+                });
+            }
+            check_placeholders(template, None)?;
+            RuleBackend::Single {
+                executor: executor.to_string(),
+                template: template.to_string(),
+            }
+        }
+        (None, false) => {
+            return Err(PresetError {
+                sub_code: PresetSubCode::SchemaInvalid,
+                message: format!(
+                    "rule[{idx}] (kind={}) must set either `executor` + `template` OR `composite`",
+                    r.kind
+                ),
+                path: src.map(String::from),
+            });
+        }
+    };
 
     Ok(CompiledRule {
         kind: r.kind.clone(),
         host: r.host.to_lowercase(),
         path_matcher,
         query_regexes,
-        executor: r.executor.clone(),
-        template: r.template.clone(),
+        backend,
     })
+}
+
+/// Composite-part label validator: `[a-z][a-z0-9_]*`. Labels show up as
+/// JSON object keys in raw artifacts AND as wiki frontmatter values; the
+/// stricter-than-slug charset keeps round-tripping unambiguous.
+fn is_valid_label(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else { return false };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn bound_placeholders(
@@ -547,6 +719,7 @@ pub fn classify(
                 &url_to_map(url, &parsed, &HashMap::new()),
             ),
             url: url.into(),
+            composite: None,
         };
         return Ok(Classification::Forced(route));
     }
@@ -554,11 +727,36 @@ pub fn classify(
     for rule in &preset.rules {
         if let Some(captures) = match_rule(rule, &parsed) {
             let tpl_map = url_to_map(url, &parsed, &captures);
-            let route = Route {
-                executor: Executor::parse(&rule.executor).expect("validated at load"),
-                kind: rule.kind.clone(),
-                command_template: interpolate(&rule.template, &tpl_map),
-                url: url.into(),
+            let route = match &rule.backend {
+                RuleBackend::Single { executor, template } => Route {
+                    executor: Executor::parse(executor).expect("validated at load"),
+                    kind: rule.kind.clone(),
+                    command_template: interpolate(template, &tpl_map),
+                    url: url.into(),
+                    composite: None,
+                },
+                RuleBackend::Composite(parts) => {
+                    let resolved: Vec<ResolvedPart> = parts
+                        .iter()
+                        .map(|p| ResolvedPart {
+                            executor: Executor::parse(&p.executor).expect("validated at load"),
+                            command: interpolate(&p.template, &tpl_map),
+                            label: p.label.clone(),
+                        })
+                        .collect();
+                    // Top-level `executor` / `command_template` carry the
+                    // first part for legacy code paths that don't yet
+                    // understand composite; fetch::execute branches on
+                    // `composite.is_some()` before reading those.
+                    let first = &resolved[0];
+                    Route {
+                        executor: first.executor,
+                        kind: rule.kind.clone(),
+                        command_template: first.command.clone(),
+                        url: url.into(),
+                        composite: Some(resolved),
+                    }
+                }
             };
             return Ok(Classification::Matched(route));
         }
@@ -573,6 +771,7 @@ pub fn classify(
             &url_to_map(url, &parsed, &HashMap::new()),
         ),
         url: url.into(),
+        composite: None,
     };
     Ok(Classification::Fallback(route))
 }
@@ -606,6 +805,7 @@ fn classify_as_local(input: &str) -> Option<Route> {
         kind: kind.to_string(),
         command_template: format!("<local read {}>", abs.display()),
         url: canonical,
+        composite: None,
     })
 }
 

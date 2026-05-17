@@ -73,6 +73,10 @@ impl Env {
         }
         if let Some(a) = actionbook {
             cmd.env("ACTIONBOOK_BIN", a);
+            // These integration tests stub the V1 CLI via ACTIONBOOK_BIN, so
+            // force the dispatcher onto the V1 path. Without this, the V2
+            // backend (default) would try to reach edge.actionbook.dev.
+            cmd.env("ACTIONBOOK_BACKEND", "v1-cli");
         }
         let out = cmd.output().expect("spawn research");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

@@ -36,10 +36,21 @@ pub fn rebuild(slug: &str, events: &[SessionEvent]) -> Result<(), RewriteError> 
             url,
             kind,
             trust_score,
+            composite,
+            parts,
             ..
         } = ev
         {
-            rendered.push_str(&format!("- [{kind} · trust {trust_score:.1}] {url}\n"));
+            // Composite annotation: append `composite (N parts)` so users
+            // skimming session.md can spot fan-out rows without opening
+            // the raw artifact. Single-source rows stay byte-identical to v0.3.
+            let composite_tag = match (composite, parts) {
+                (Some(true), Some(p)) => format!(" · composite ({} parts)", p.len()),
+                _ => String::new(),
+            };
+            rendered.push_str(&format!(
+                "- [{kind} · trust {trust_score:.1}{composite_tag}] {url}\n"
+            ));
         }
     }
     if rendered == "\n" {
@@ -73,6 +84,9 @@ mod tests {
             bytes: 100,
             trust_score: score,
             note: None,
+            composite: None,
+            parts: None,
+            part_bytes: None,
         }
     }
 

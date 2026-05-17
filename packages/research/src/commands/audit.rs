@@ -652,6 +652,24 @@ fn summarize_event(ev: &SessionEvent) -> String {
         SessionEvent::SessionClosed { .. } => "session closed".to_string(),
         SessionEvent::SessionRemoved { .. } => "session removed".to_string(),
         SessionEvent::SessionResumed { .. } => "session resumed".to_string(),
+        SessionEvent::WikiSeeded {
+            host,
+            site,
+            page,
+            bytes,
+            ..
+        } => format!("wiki seeded host={host} site={site} page={page} bytes={bytes}"),
+        SessionEvent::ActionbookCalled {
+            iteration,
+            action_type,
+            outcome,
+            cmd_summary,
+            error_code,
+            ..
+        } => format!(
+            "actionbook called iter={iteration} type={action_type} outcome={outcome} error={} cmd={cmd_summary}",
+            error_code.as_deref().unwrap_or("none")
+        ),
     }
 }
 

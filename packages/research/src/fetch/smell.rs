@@ -71,6 +71,7 @@ pub fn judge_api(r: &ApiResponse) -> FetchOutcome {
         reject_reason: None,
         warnings: Vec::new(),
         bytes: r.body_bytes,
+        ..Default::default()
     };
     if let Some(status) = r.status
         && !(200..300).contains(&status)
@@ -107,6 +108,7 @@ pub fn judge_browser_with(r: &BrowserResponse, cfg: SmellConfig) -> FetchOutcome
         reject_reason: None,
         warnings: Vec::new(),
         bytes: body_len,
+        ..Default::default()
     };
 
     // ── Hard gate #1: empty / pseudo observed URL ─────────────────────────
@@ -178,15 +180,26 @@ pub fn judge_browser_with(r: &BrowserResponse, cfg: SmellConfig) -> FetchOutcome
 /// Normalize two URLs enough to compare: lowercase scheme+host, strip trailing
 /// slash, ignore query/fragment. A host-mismatch is a hard fail; path prefix
 /// match OK (the page might add query string).
+///
+/// `www.X` and apex `X` are treated as the same host (web standard practice;
+/// most sites redirect one to the other). Other normalization (port stripping,
+/// PSL, IDN) is out of scope — see `actionbook-v2-mcp-backend.spec.md` §
+/// Smell host normalization.
 fn urls_compatible(requested: &str, observed: &str) -> bool {
     let (rh, rp) = split_host_path(requested);
     let (oh, op) = split_host_path(observed);
-    if rh != oh {
+    if normalize_host(&rh) != normalize_host(&oh) {
         return false;
     }
     let rp_trim = rp.trim_end_matches('/');
     let op_trim = op.trim_end_matches('/');
     op_trim == rp_trim || op_trim.starts_with(rp_trim)
+}
+
+/// Strip a single `www.` prefix so that `www.X` and apex `X` compare equal.
+/// Intentionally narrow — only `www.`, not other vanity subdomains.
+fn normalize_host(host: &str) -> &str {
+    host.strip_prefix("www.").unwrap_or(host)
 }
 
 fn split_host_path(url: &str) -> (String, String) {
@@ -289,6 +302,59 @@ mod tests {
         };
         let o = judge_browser(&r);
         assert_eq!(o.reject_reason, Some(RejectReason::EmptyContent));
+    }
+
+    // ── www/apex host equivalence (spec § Smell host normalization) ──
+
+    #[test]
+    fn normalize_host_strips_www_prefix() {
+        assert_eq!(normalize_host("www.rust-lang.org"), "rust-lang.org");
+    }
+
+    #[test]
+    fn normalize_host_preserves_apex_and_other_subdomains() {
+        assert_eq!(normalize_host("rust-lang.org"), "rust-lang.org");
+        assert_eq!(normalize_host("blog.rust-lang.org"), "blog.rust-lang.org");
+        assert_eq!(normalize_host("api.github.com"), "api.github.com");
+    }
+
+    #[test]
+    fn smell_www_apex_host_equivalence() {
+        assert!(urls_compatible(
+            "https://www.rust-lang.org/",
+            "https://rust-lang.org/"
+        ));
+        assert!(urls_compatible(
+            "https://rust-lang.org/",
+            "https://www.rust-lang.org/"
+        ));
+    }
+
+    #[test]
+    fn smell_www_apex_equivalence_does_not_relax_real_host_mismatch() {
+        // Real cross-host should still be a hard fail.
+        assert!(!urls_compatible(
+            "https://www.rust-lang.org/",
+            "https://example.com/"
+        ));
+        // www of A vs www of B is also still a mismatch.
+        assert!(!urls_compatible(
+            "https://www.example.com/",
+            "https://www.example.org/"
+        ));
+    }
+
+    #[test]
+    fn browser_www_apex_redirect_accepts() {
+        let r = BrowserResponse {
+            requested_url: "https://www.rust-lang.org/",
+            observed_url: "https://rust-lang.org/",
+            body_bytes: &[b'x'; 1000],
+            readable_mode: true,
+        };
+        let o = judge_browser(&r);
+        assert!(o.accepted, "www→apex redirect must NOT trip WrongUrl");
+        assert!(o.reject_reason.is_none());
     }
 
     #[test]
