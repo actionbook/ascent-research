@@ -23,7 +23,7 @@ pub fn run(slug: &str, open: bool, bilingual: bool) -> Envelope {
         }));
     }
 
-    let synthesis_env = synthesize::run(Some(slug), false, open, bilingual);
+    let synthesis_env = synthesize::run(Some(slug), false, open, bilingual, false, None);
     if !synthesis_env.ok {
         return stage_error("synthesize", synthesis_env);
     }

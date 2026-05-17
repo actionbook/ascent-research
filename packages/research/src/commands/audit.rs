@@ -90,8 +90,11 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     let mut synth_failed = 0usize;
     let mut synth_bilingual_started = 0usize;
     let mut latest_bilingual_provider: Option<String> = None;
+    let mut synth_pdf_started = 0usize;
+    let mut latest_pdf_provider: Option<String> = None;
     let mut latest_report_json: Option<String> = None;
     let mut latest_report_html: Option<String> = None;
+    let mut latest_report_pdf: Option<String> = None;
     let mut latest_synth_failure: Option<String> = None;
 
     let mut loop_started = 0usize;
@@ -99,6 +102,7 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
     let mut loop_completed = 0usize;
     let mut last_loop_reason: Option<String> = None;
     let mut last_loop_report_ready: Option<bool> = None;
+    let mut fallback_events: Vec<Value> = Vec::new();
 
     for ev in &events {
         match ev {
@@ -111,6 +115,53 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
                 digested_sources.insert(url.clone());
             }
             SessionEvent::SourceRejected { .. } => sources_rejected += 1,
+            SessionEvent::FallbackSelected {
+                from_hand,
+                to_hand,
+                reason,
+                note,
+                ..
+            } => {
+                fallback_events.push(json!({
+                    "kind": "fallback_selected",
+                    "from_hand": from_hand,
+                    "to_hand": to_hand,
+                    "reason": reason,
+                    "note": note,
+                }));
+            }
+            SessionEvent::OriginalUrlPreserved {
+                local_url,
+                original_url,
+                origin_tool,
+                origin_note,
+                ..
+            } => {
+                fallback_events.push(json!({
+                    "kind": "original_url_preserved",
+                    "local_url": local_url,
+                    "original_url": original_url,
+                    "origin_tool": origin_tool,
+                    "origin_note": origin_note,
+                }));
+            }
+            SessionEvent::FallbackSourceAccepted {
+                local_url,
+                original_url,
+                origin_tool,
+                bytes,
+                note,
+                ..
+            } => {
+                fallback_events.push(json!({
+                    "kind": "fallback_source_accepted",
+                    "local_url": local_url,
+                    "original_url": original_url,
+                    "origin_tool": origin_tool,
+                    "bytes": bytes,
+                    "note": note,
+                }));
+            }
             SessionEvent::ToolCallStarted {
                 call_id,
                 hand,
@@ -180,6 +231,8 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
             SessionEvent::SynthesizeStarted {
                 bilingual,
                 bilingual_provider,
+                pdf,
+                pdf_provider,
                 ..
             } => {
                 synth_started += 1;
@@ -187,15 +240,21 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
                     synth_bilingual_started += 1;
                     latest_bilingual_provider = bilingual_provider.clone();
                 }
+                if *pdf {
+                    synth_pdf_started += 1;
+                    latest_pdf_provider = pdf_provider.clone();
+                }
             }
             SessionEvent::SynthesizeCompleted {
                 report_json_path,
                 report_html_path,
+                report_pdf_path,
                 ..
             } => {
                 synth_completed += 1;
                 latest_report_json = Some(report_json_path.clone());
                 latest_report_html = report_html_path.clone();
+                latest_report_pdf = report_pdf_path.clone();
             }
             SessionEvent::SynthesizeFailed { reason, .. } => {
                 synth_failed += 1;
@@ -369,6 +428,9 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
                 "accepted": sources_accepted,
                 "rejected": sources_rejected,
             },
+            "fallback": {
+                "events": fallback_events,
+            },
             "tools": {
                 "started": tools_started,
                 "completed": tools_completed,
@@ -384,21 +446,25 @@ pub fn run(slug_arg: Option<&str>) -> Envelope {
                 "supported": fact_supported,
                 "refuted": fact_refuted,
                 "uncertain": fact_uncertain,
-            "invalid_sources": fact_invalid_sources,
-            "undigested_sources": fact_undigested_sources,
-            "items": fact_checks,
-        },
+                "invalid_sources": fact_invalid_sources,
+                "undigested_sources": fact_undigested_sources,
+                "items": fact_checks,
+            },
             "synthesis": {
                 "started": synth_started,
                 "completed": synth_completed,
                 "failed": synth_failed,
                 "report_json_path": latest_report_json,
                 "report_html_path": latest_report_html,
+                "report_pdf_path": latest_report_pdf,
                 "latest_failure": latest_synth_failure,
                 "report_html": report_html,
                 "bilingual_requested": synth_bilingual_started > 0,
                 "bilingual_started": synth_bilingual_started,
                 "latest_bilingual_provider": latest_bilingual_provider,
+                "pdf_requested": synth_pdf_started > 0,
+                "pdf_started": synth_pdf_started,
+                "latest_pdf_provider": latest_pdf_provider,
             },
             "loop": {
                 "started": loop_started,
@@ -449,6 +515,29 @@ fn summarize_event(ev: &SessionEvent) -> String {
             executor,
             ..
         } => format!("source rejected via {executor} reason={reason:?} url={url}"),
+        SessionEvent::FallbackSelected {
+            from_hand,
+            to_hand,
+            reason,
+            ..
+        } => format!("fallback selected {from_hand}->{to_hand} reason={reason}"),
+        SessionEvent::OriginalUrlPreserved {
+            local_url,
+            original_url,
+            origin_tool,
+            ..
+        } => format!(
+            "original url preserved origin_tool={origin_tool} original={original_url} local={local_url}"
+        ),
+        SessionEvent::FallbackSourceAccepted {
+            local_url,
+            original_url,
+            origin_tool,
+            bytes,
+            ..
+        } => format!(
+            "fallback source accepted origin_tool={origin_tool} bytes={bytes} original={original_url} local={local_url}"
+        ),
         SessionEvent::ToolCallStarted {
             call_id,
             hand,
@@ -482,16 +571,22 @@ fn summarize_event(ev: &SessionEvent) -> String {
             open,
             bilingual,
             bilingual_provider,
+            pdf,
+            pdf_provider,
             ..
         } => format!(
-            "synthesize started no_render={no_render} open={open} bilingual={bilingual} provider={}",
-            bilingual_provider.as_deref().unwrap_or("none")
+            "synthesize started no_render={no_render} open={open} bilingual={bilingual} provider={} pdf={pdf} pdf_provider={}",
+            bilingual_provider.as_deref().unwrap_or("none"),
+            pdf_provider.as_deref().unwrap_or("none")
         ),
         SessionEvent::SynthesizeCompleted {
-            report_html_path, ..
+            report_html_path,
+            report_pdf_path,
+            ..
         } => format!(
-            "synthesize completed html={}",
-            report_html_path.as_deref().unwrap_or("none")
+            "synthesize completed html={} pdf={}",
+            report_html_path.as_deref().unwrap_or("none"),
+            report_pdf_path.as_deref().unwrap_or("none")
         ),
         SessionEvent::SynthesizeFailed { stage, reason, .. } => {
             format!("synthesize failed stage={stage:?} reason={reason}")

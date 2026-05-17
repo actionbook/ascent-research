@@ -1,0 +1,222 @@
+{
+  "children": [
+    {
+      "props": {
+        "badge": "Research Report",
+        "poweredBy": "Actionbook / research CLI"
+      },
+      "type": "BrandHeader"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "这批 PURSUE Release 01 文件最重要的含义，不是美国政府“确认外星生命”，而是官方把一组 unresolved UAP records、索引 metadata、历史案卷和若干近期军事/外交记录放到同一公开入口下，供公众检查其来源、删节、时间线和证据质量。\n\n判断这批材料时，应把证据分成几层：官方入口页和 CSV 索引说明“释放了哪些文件”；PDF 原文和 pdftotext 抽取文本说明“文件内部如何表述事件”；而目击叙述、任务日志中的 UAP 字样、邮件 tearlines 或历史电报，只能说明相关人员记录了未识别现象，不能自动推出现象具备非人技术、异常机动能力或外星来源。\n\n因此，本报告采用结论先行但证据分层的写法：先说明 release 的结构，再用代表性案例展示不同文件类型的证据强弱，最后给出公众阅读这类 UAP 材料时可执行的判断框架。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "Overview"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "这批材料首先应被理解为一个“官方文件释放包”，而不是一个结论包。CSV 索引把每个条目拆成 release date、标题、类型、机构、事件日期、地点、说明 blurb 和媒体链接等字段；因此它最可靠的用途，是回答“释放了哪些文件、由哪些机构提供、以什么媒介形态出现”，而不是直接回答“这些现象是什么”。这一点对读者很关键：metadata 可以建立检索框架，但不能替代 PDF 原文、图像/视频链路和任务报告中的证据质量判断。"
+          },
+          "type": "Prose"
+        },
+        {
+          "props": {
+            "alt": "PURSUE Release 01 结构图",
+            "src": "diagrams/release-structure.svg",
+            "width": "100%"
+          },
+          "type": "Image"
+        },
+        {
+          "props": {
+            "content": "基于 CSV，`Release Date` 指向 5/8/26，release 的条目横跨 FBI 历史案卷与 Department of War/USCENTCOM 现代任务材料等来源。FBI `62-HQ-83894` 分段尤其说明了“unresolved UAP records”的边界：这些记录包含调查材料、目击证词、公众报告、照片和媒体材料，但这些材料本身只证明政府曾收集、保存并重新释放相关档案；它们不能自动升级为“政府确认外星生命”或“确认异常技术”。后续报告应把索引当作地图，把 PDF/文本当作证据层，把 AARO 或官方背景材料当作解释层。\n\n来源：[官方 CSV 索引](file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv)。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "01 · RELEASE 结构"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "Syria 2024 任务记录的价值在于，它展示了近期军事任务文本中如何把一次 UAP 观察嵌入常规 ISR/FMV/SIGINT 任务叙述，而不是把 UAP 单独包装成完整技术结论。文本显示，任务叙述包含起飞、on-station、FMV/SIGINT collection、返回基地等任务流程，并在 1559Z 记录一次“unidentified aerial phenomenon”；同一页还出现大量依据分类理由和 FOIA 豁免的删节。这说明该文件的强证据部分是“官方任务材料中存在一次 UAP 记录”，弱证据部分则是 UAP 的性质、轨迹、传感器细节和解释，因为这些内容要么被删节，要么没有在抽取文本中形成可独立验证的完整链条。来源：[Syria 2024 mission report text](file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt)。\n\n可信结论：这是一份来自官方释放材料的任务文本，里面出现了 UAP 观察条目。有限结论：它能支持“某次军事任务记录了 unidentified aerial phenomenon”，但不能单独证明该现象具有异常物理能力。不能得出的结论：不能把这类 mission narrative 直接解读为官方确认外星生命、非人飞行器或突破性技术。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "02 · CASE EVIDENCE"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "INDOPACOM 2025 tearlines 是理解这批 release 的一个好例子：它看起来来自较高密级邮件链，但最终公开给读者的，是经过确认可降到 UNCLASSIFIED 的极短摘要，而不是完整侦察材料。文件称 2025 年 4 月 10 日与 4 月 11 日各有一次 US aircraft 观察到 possible UAP，持续时间分别为 12 秒和 23 秒，高度、速度均未知，且公开摘要称 no interference was noted；这些信息来自 [[indopacom-2025-tearlines]] 与原始抽取文本 [dow-uap-d50-indopacom-2025.txt](file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt)。\n\n这类材料的判断边界很窄。可信结论是：官方 release 中存在两条 INDOPACOM 相关、可公开的短时 possible UAP 观察摘要。有限结论是：摘要没有记录干扰，也没有给出高度和速度。不能得出的结论是：对象完成了反常机动、具有非人类来源，或已经被技术分析排除为飞机、气球、天体、光学效应、传感器误差或训练/作战背景下的误识别。换句话说，它证明“官方系统收到了并释放了 unresolved/possible UAP 记录”，不证明“官方确认外星生命”。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "03 · 案例如何读"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "### Western U.S. Event：强叙事，不等于强物证\n\n[[western-us-event-2023]] 是这批材料中最容易被公众误读的一类案例：文本说的是多名联邦执法人员在 Western U.S. 黄昏时段目击橙色“orb”释放红色“orbs”，另有两名人员称在约 500-600 米距离看到接近岩石尖峰的发光橙色物体。原始材料来自 [western-us-event-2023.txt](file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt)。\n\n可信结论：这是一份官方释放体系中的目击记录，包含多个观察者、地点差异、时间段和外观描述。有限结论：它能说明官方档案中确有未解释或未完整解释的目击叙述。不能得出的结论：仅凭这份文本，不能推出该现象是外星生命、非人类技术，或已经排除了飞机、照明、无人机、烟火、传感误差、距离误判等常规解释。\n\n这个案例的正确读法，是把“证人数量”和“叙述细节”视为线索强度，而不是物理证明强度。对于科普读者，它是判断证据质量的好样本：越戏剧化的描述，越需要追问有没有原始影像、雷达/红外链路、时间同步、传感器元数据和独立技术复核。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "04 · CASES"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "[PURSUE 官方入口页](https://www.war.gov/UFO/) 的主要作用是定义发布框架：它告诉读者这批材料被放在 “Presidential Unsealing and Reporting System for UAP Encounters” 下，并以 Release 01 的形式集中展示。入口页能证明“政府设立了公开入口并释放相关记录”，但不能证明每一条记录都已经完成科学鉴定。\n\n[AARO 官网](https://www.aaro.mil/) 则提供制度背景：UAP 资料已经进入专门机构、公开记录、案例页面、FAQ 和报告入口等流程。这个背景有助于理解为什么 UAP 文件会被整理和释放，但它不能替代 PURSUE CSV 或 PDF 原文来证明某个个案的事实细节。\n\nKuwait 2022 的 PR20 文本是一个“薄证据样本”。抽取文本 [dow-uap-pr20-kuwait-2022.txt](file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt) 主要保留公开审查、USCENTCOM 推荐和发布审批信息，几乎没有可用于重建事件的细节。它提醒读者：release 中的每个 PDF 并不都同等丰富，有些条目只能支持“存在一个被释放的记录壳和审批链”，不能支持关于目标性质的强判断。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "05 · 官方框架与薄证据样本"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "巴布亚新几内亚 1985 年电报代表的是历史外交记录层。抽取文本 [dos-papua-new-guinea-1985.txt](file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt) 显示，美国驻莫尔兹比港使馆收到 PNG 国家情报组织关于高空、高速飞行器目击的询问，并将其纳入外交通信链。\n\n可信结论是：该事件曾被地方机构、美国使馆和后续信息链条记录。有限结论是：它提供了时间、地点、转报对象和叙事来源。不能得出的结论是：电报本身没有提供可复核雷达、轨迹、传感器数据、残骸或独立物理分析，因此不能从“有正式电报记录”跳到“确认非人技术”。"
+          },
+          "type": "Prose"
+        }
+      ],
+      "props": {
+        "icon": "paper",
+        "title": "06 · 历史电报与结论边界"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "links": [
+              {
+                "href": "https://www.war.gov/UFO/",
+                "icon": "book",
+                "label": "[browser-fallback · trust 1.5] https://www.war.gov/UFO/"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt"
+              },
+              {
+                "href": "file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt",
+                "icon": "book",
+                "label": "[local-file · trust 2.0] file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt"
+              },
+              {
+                "href": "https://www.aaro.mil/",
+                "icon": "book",
+                "label": "[browser-fallback · trust 1.0] https://www.aaro.mil/"
+              }
+            ]
+          },
+          "type": "LinkGroup"
+        }
+      ],
+      "props": {
+        "icon": "link",
+        "title": "Sources"
+      },
+      "type": "Section"
+    },
+    {
+      "children": [
+        {
+          "props": {
+            "content": "Total accepted: 8 (postagent: 0, browser: 2) · Rejected: 0 · Preset: tech",
+            "data": {
+              "accepted_browser": 2,
+              "accepted_postagent": 0,
+              "accepted_total": 8,
+              "preset": "tech",
+              "rejected_total": 0
+            },
+            "title": "Source inventory",
+            "type": "note"
+          },
+          "type": "Callout"
+        }
+      ],
+      "props": {
+        "icon": "info",
+        "title": "Methodology"
+      },
+      "type": "Section"
+    },
+    {
+      "props": {
+        "attribution": "Powered by Actionbook + postagent",
+        "disclaimer": "Generated by the research CLI. Verify critical claims against upstream sources.",
+        "timestamp": "2026-05-09T10:24:33.606428+00:00"
+      },
+      "type": "BrandFooter"
+    }
+  ],
+  "props": {
+    "theme": "auto"
+  },
+  "type": "Report"
+}

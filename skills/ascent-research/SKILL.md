@@ -38,6 +38,25 @@ ascent-research --json doctor --tool-smoke
 
 If a required tool-smoke check fails, **STOP** and surface the failing tool check. Optional warnings such as `postagent_public_dry_run` should be treated as routing guidance: prefer browser or local ingest if public postagent fetches are not accepted by the installed postagent contract.
 
+When online hands fail, preserve fallback provenance instead of silently
+switching tools. If you cache a web page/source note locally, ingest it with:
+
+```bash
+ascent-research add-local ./cache --slug <slug> \
+  --original-url https://example.com/source \
+  --origin-tool curl \
+  --origin-note "actionbook daemon unavailable; cached with curl"
+```
+
+Rules for fallback sources:
+
+- Use source notes only as a last resort when postagent/browser cannot fetch.
+- Every source note must list the original URLs and explain why direct ingest failed.
+- In the final reply, disclose which hand failed and which fallback path was used.
+- For legal, medical, financial, current, or compliance claims, do not present a
+  source note as high-confidence primary evidence unless the report labels the
+  conclusion limited-confidence or later re-fetches the original URLs.
+
 For any playbook that will call `loop`, `wiki query`, or `synthesize --bilingual`, also run a live provider smoke check first:
 
 ```bash
@@ -204,6 +223,7 @@ ascent-research route <url>     [--rules <file>] [--preset <name>] [--prefer bro
 
 ```
 ascent-research add-local <path> [--slug <s>] [--glob '...']... [--max-file-bytes N] [--max-total-bytes N]
+                          [--original-url URL] [--origin-tool TOOL] [--origin-note TEXT]
 ```
 
 - `<path>` can be `file://abs/path`, `/abs/path`, `./rel/path`, `~/rel/path`, or a bare path.
@@ -211,6 +231,7 @@ ascent-research add-local <path> [--slug <s>] [--glob '...']... [--max-file-byte
 - Caps enforced at walk time: default 256 KB per file, 2 MB per walk. Direct `add file:///…` calls get an 8 MB fetch-stage backstop.
 - Binary files (null-byte probe) are rejected; only text survives the gate.
 - Each accepted file becomes an independent source with `file://` URL — same pipeline as online `add`, goes through smell test, appears in `sources` and `coverage`.
+- `--original-url` / `--origin-tool` / `--origin-note` record fallback provenance in `session.jsonl` when a local file is standing in for a failed online hand.
 
 ### GitHub trust audit
 
@@ -273,7 +294,7 @@ ascent-research wiki lint                    [--slug <s>] [--stale-days N]
 ### Output / QA
 
 ```
-ascent-research synthesize      [<slug>] [--no-render] [--open] [--bilingual]
+ascent-research synthesize      [<slug>] [--no-render] [--open] [--bilingual] [--pdf] [--pdf-output <path>]
 ascent-research report <slug>   --format rich-html|brief-md [--open | --no-open] [--stdout] [--output <path>]
 ascent-research series <tag>    [--open]
 ascent-research coverage        [<slug>]
@@ -281,6 +302,7 @@ ascent-research diff            [<slug>] [--unused-only]
 ```
 
 - `synthesize` is the full path: renders `report.json` + inline-SVG + wiki TOC + sources list + optional bilingual (`--bilingual` calls Claude to inject `<p class="tr-zh">` siblings).
+- PDF export is opt-in only: `synthesize <slug> --pdf` converts the rendered `report.html` to `<session>/report.pdf` through the local backend. It prefers isolated Playwright Chromium/headless_shell and keeps the HTML on the user's machine. If no safe local Chromium is installed, run `npx playwright install chromium` or set `ASR_PDF_CHROME_BIN`. Do not auto-launch the user's desktop Google Chrome; only opt into that fallback with `ASR_PDF_ALLOW_SYSTEM_CHROME=1` if explicitly requested. `--pdf-output <path>` overrides the output and implies `--pdf`.
 - `report --format brief-md` dumps a lean markdown digest — useful for PR descriptions or quick sharing.
 - `series <tag>` renders an HTML index for every session carrying that tag.
 - `coverage` returns metrics + `report_ready_blockers` (array of human-readable reasons). If `report_ready: true`, the session is done. For `--tag fact-check` sessions, inspect `fact_check_required`, `fact_checks_total`, and `fact_check_invalid_sources`.
@@ -464,6 +486,7 @@ These rules are encoded in `autoresearch/executor.rs` and surfaced to the agent 
 | `SLUG_EXISTS` | `new` collision | `--force` to overwrite, or pick fresh slug |
 | `PARENT_NOT_FOUND` | `--from <x>` unknown | Create parent first |
 | `PATH_NOT_FOUND` | `add-local` path missing | Check `~` expansion, use absolute path |
+| `actionbook_browser_*` failed in doctor | Browser hand unhealthy | Run `actionbook browser doctor --start --json` or `actionbook browser restart --json` when available; otherwise use `add-local --original-url ...` and disclose fallback |
 | `WALK_FAILED` | Dir walk error | Usually permissions; try `ls -la` |
 | `SMELL_REJECTED` | Fetched body failed quality gate | See `sources --rejected` for reason; try `--readable` for browser fetches |
 | `PROVIDER_NOT_AVAILABLE` | Build lacks LLM feature | `cargo build --features "autoresearch provider-claude provider-codex"` |

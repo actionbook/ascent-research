@@ -10,6 +10,7 @@ use crate::commands::coverage;
 use crate::output::Envelope;
 use crate::report::builder::{self, BuildError, ReportInput};
 use crate::report::markdown::{self, RenderError};
+use crate::report::pdf_local::{self, LocalPdfOptions};
 use crate::report::sources;
 use crate::report::template::{self, Slots};
 use crate::report::wiki_render;
@@ -21,7 +22,14 @@ use crate::session::{
 
 const CMD: &str = "research synthesize";
 
-pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool) -> Envelope {
+pub fn run(
+    slug_arg: Option<&str>,
+    no_render: bool,
+    open: bool,
+    bilingual: bool,
+    pdf: bool,
+    pdf_output: Option<&str>,
+) -> Envelope {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
         None => match active::get_active() {
@@ -62,6 +70,8 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
             open,
             bilingual,
             bilingual_provider: requested_bilingual_provider(bilingual),
+            pdf,
+            pdf_provider: if pdf { Some("local".into()) } else { None },
             note: None,
         },
     );
@@ -191,6 +201,8 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
     // single canonical report template across the project.
     let mut report_html_path: Option<String> = None;
     let mut report_html_abs: Option<PathBuf> = None;
+    let mut report_pdf_path: Option<String> = None;
+    let mut report_pdf_bytes: Option<u64> = None;
     let mut render_error: Option<String> = None;
     let mut render_warnings: Vec<String> = Vec::new();
     if !no_render {
@@ -216,13 +228,89 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
                 note: None,
             },
         );
-    } else {
+    }
+
+    if render_error.is_none() && pdf {
+        let Some(html_path) = report_html_abs.as_ref() else {
+            let reason =
+                "PDF conversion requires a rendered report.html; remove --no-render".to_string();
+            let _ = log::append(
+                &slug,
+                &SessionEvent::SynthesizeFailed {
+                    timestamp: Utc::now(),
+                    stage: SynthesizeStage::Render,
+                    reason: reason.clone(),
+                    note: None,
+                },
+            );
+            return Envelope::fail(CMD, "PDF_REQUIRES_HTML", reason)
+                .with_context(json!({ "session": slug }))
+                .with_details(json!({
+                    "report_json_path": rel_path(&report_json_path),
+                    "report_html_path": report_html_path,
+                }));
+        };
+        let output_path = match resolve_pdf_output(&slug, pdf_output) {
+            Ok(path) => path,
+            Err(e) => {
+                let reason = format!("pdf output path: {e}");
+                let _ = log::append(
+                    &slug,
+                    &SessionEvent::SynthesizeFailed {
+                        timestamp: Utc::now(),
+                        stage: SynthesizeStage::Render,
+                        reason: reason.clone(),
+                        note: None,
+                    },
+                );
+                return Envelope::fail(CMD, "PDF_OUTPUT_INVALID", reason)
+                    .with_context(json!({ "session": slug }))
+                    .with_details(json!({
+                        "report_json_path": rel_path(&report_json_path),
+                        "report_html_path": report_html_path,
+                    }));
+            }
+        };
+        match convert_pdf(html_path, &output_path) {
+            Ok(result) => {
+                report_pdf_path = Some(rel_path(&result.output_path));
+                report_pdf_bytes = Some(result.bytes);
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                let _ = log::append(
+                    &slug,
+                    &SessionEvent::SynthesizeFailed {
+                        timestamp: Utc::now(),
+                        stage: SynthesizeStage::Render,
+                        reason: format!("pdf local: {reason}"),
+                        note: None,
+                    },
+                );
+                return Envelope::fail(CMD, "PDF_CONVERSION_FAILED", reason)
+                    .with_context(json!({ "session": slug }))
+                    .with_details(json!({
+                        "report_json_path": rel_path(&report_json_path),
+                        "report_html_path": report_html_path,
+                        "report_pdf_path": rel_path(&output_path),
+                        "pdf": {
+                            "requested": true,
+                            "provider": "local",
+                            "status": "failed",
+                        },
+                    }));
+            }
+        }
+    }
+
+    if render_error.is_none() {
         let _ = log::append(
             &slug,
             &SessionEvent::SynthesizeCompleted {
                 timestamp: Utc::now(),
                 report_json_path: rel_path(&report_json_path),
                 report_html_path: report_html_path.clone(),
+                report_pdf_path: report_pdf_path.clone(),
                 accepted_sources: built.accepted_count,
                 rejected_sources: built.rejected_count,
                 duration_ms,
@@ -284,10 +372,64 @@ pub fn run(slug_arg: Option<&str>, no_render: bool, open: bool, bilingual: bool)
                 "status": bilingual_status,
                 "zh_paragraphs": zh_paragraphs,
             },
+            "pdf": {
+                "requested": pdf,
+                "provider": if pdf { "local" } else { "none" },
+                "status": pdf_status(pdf, report_pdf_path.as_deref()),
+                "report_pdf_path": report_pdf_path,
+                "bytes": report_pdf_bytes,
+            },
             "warnings": all_warnings,
         }),
     )
     .with_context(json!({ "session": slug }))
+}
+
+struct PdfResult {
+    output_path: PathBuf,
+    bytes: u64,
+}
+
+fn convert_pdf(
+    html_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<PdfResult, String> {
+    pdf_local::convert_html_file(
+        html_path,
+        &LocalPdfOptions {
+            output_path: output_path.to_path_buf(),
+        },
+    )
+    .map(|r| PdfResult {
+        output_path: r.output_path,
+        bytes: r.bytes,
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn resolve_pdf_output(slug: &str, pdf_output: Option<&str>) -> Result<PathBuf, std::io::Error> {
+    match pdf_output {
+        Some(path) => {
+            let raw = PathBuf::from(path);
+            if raw.is_absolute() {
+                Ok(raw)
+            } else {
+                std::env::current_dir().map(|cwd| cwd.join(raw))
+            }
+        }
+        None => Ok(layout::session_report_pdf(slug)),
+    }
+}
+
+fn pdf_status(requested: bool, report_pdf_path: Option<&str>) -> &'static str {
+    if !requested {
+        return "not_requested";
+    }
+    if report_pdf_path.is_some() {
+        "complete"
+    } else {
+        "missing"
+    }
 }
 
 /// Render the rich-html report to `<session>/report.html` using the same

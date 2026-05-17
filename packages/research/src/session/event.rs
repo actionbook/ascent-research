@@ -71,6 +71,33 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
+    FallbackSelected {
+        timestamp: DateTime<Utc>,
+        from_hand: String,
+        to_hand: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    OriginalUrlPreserved {
+        timestamp: DateTime<Utc>,
+        local_url: String,
+        original_url: String,
+        origin_tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_note: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
+    FallbackSourceAccepted {
+        timestamp: DateTime<Utc>,
+        local_url: String,
+        original_url: String,
+        origin_tool: String,
+        bytes: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+    },
     SourceRejected {
         timestamp: DateTime<Utc>,
         url: String,
@@ -117,6 +144,10 @@ pub enum SessionEvent {
         bilingual: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bilingual_provider: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        pdf: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pdf_provider: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
@@ -125,6 +156,8 @@ pub enum SessionEvent {
         report_json_path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         report_html_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        report_pdf_path: Option<String>,
         accepted_sources: u32,
         rejected_sources: u32,
         duration_ms: u64,
@@ -434,6 +467,29 @@ mod tests {
                 trust_score: 2.0,
                 note: None,
             },
+            SessionEvent::FallbackSelected {
+                timestamp: ts(),
+                from_hand: "actionbook".into(),
+                to_hand: "local".into(),
+                reason: "daemon unavailable".into(),
+                note: None,
+            },
+            SessionEvent::OriginalUrlPreserved {
+                timestamp: ts(),
+                local_url: "file:///tmp/source.html".into(),
+                original_url: "https://example.com".into(),
+                origin_tool: "curl".into(),
+                origin_note: Some("browser failed".into()),
+                note: None,
+            },
+            SessionEvent::FallbackSourceAccepted {
+                timestamp: ts(),
+                local_url: "file:///tmp/source.html".into(),
+                original_url: "https://example.com".into(),
+                origin_tool: "curl".into(),
+                bytes: 1234,
+                note: None,
+            },
             SessionEvent::SourceRejected {
                 timestamp: ts(),
                 url: "https://example.com".into(),
@@ -451,12 +507,15 @@ mod tests {
                 open: false,
                 bilingual: true,
                 bilingual_provider: Some("codex".into()),
+                pdf: true,
+                pdf_provider: Some("local".into()),
                 note: None,
             },
             SessionEvent::SynthesizeCompleted {
                 timestamp: ts(),
                 report_json_path: "report.json".into(),
                 report_html_path: Some("report.html".into()),
+                report_pdf_path: Some("report.pdf".into()),
                 accepted_sources: 3,
                 rejected_sources: 1,
                 duration_ms: 500,
@@ -481,7 +540,7 @@ mod tests {
                 note: None,
             },
         ];
-        assert_eq!(events.len(), 10, "must have 10 variants");
+        assert_eq!(events.len(), 13, "must have 13 variants");
         for ev in events {
             let s = serde_json::to_string(&ev).unwrap();
             let back: SessionEvent = serde_json::from_str(&s).unwrap();

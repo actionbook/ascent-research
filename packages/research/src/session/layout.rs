@@ -114,6 +114,10 @@ pub fn session_report_html(slug: &str) -> PathBuf {
     session_dir(slug).join("report.html")
 }
 
+pub fn session_report_pdf(slug: &str) -> PathBuf {
+    session_dir(slug).join("report.pdf")
+}
+
 /// Wiki page root — `<research_root>/<slug>/wiki/`. Contains
 /// per-entity / per-concept / per-source markdown pages the agent
 /// creates through `WriteWikiPage` / `AppendWikiPage`.

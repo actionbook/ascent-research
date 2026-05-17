@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 
 use crate::fetch::local;
 use crate::output::Envelope;
-use crate::session::{active, config};
+use crate::session::{active, config, event::SessionEvent, log};
+use chrono::Utc;
 
 const CMD: &str = "research add-local";
 
@@ -29,6 +30,9 @@ pub fn run(
     globs: &[String],
     max_file_bytes: Option<u64>,
     max_total_bytes: Option<u64>,
+    original_url: Option<&str>,
+    origin_tool: Option<&str>,
+    origin_note: Option<&str>,
 ) -> Envelope {
     let slug = match slug_arg {
         Some(s) => s.to_string(),
@@ -84,6 +88,20 @@ pub fn run(
 
     let mut accepted_results: Vec<Value> = Vec::new();
     let mut failure_results: Vec<Value> = Vec::new();
+    if let Some(original_url) = original_url {
+        let origin_tool = origin_tool.unwrap_or("manual");
+        let reason = origin_note.unwrap_or("local fallback ingest");
+        let ev = SessionEvent::FallbackSelected {
+            timestamp: Utc::now(),
+            from_hand: origin_tool.to_string(),
+            to_hand: "local".to_string(),
+            reason: reason.to_string(),
+            note: Some(format!("original_url={original_url}")),
+        };
+        if let Err(e) = log::append(&slug, &ev) {
+            return Envelope::fail(CMD, "IO_ERROR", format!("append fallback_selected: {e}"));
+        }
+    }
 
     // Reuse the existing `add` flow per file — same raw write, same
     // session.jsonl event, same smell test, same trust score. Cost is
@@ -101,9 +119,46 @@ pub fn run(
             None, // on-short-body — default reject
         );
         if env.ok {
+            if let Some(original_url) = original_url {
+                let origin_tool = origin_tool.unwrap_or("manual");
+                let origin_note = origin_note.map(str::to_string);
+                let preserved = SessionEvent::OriginalUrlPreserved {
+                    timestamp: Utc::now(),
+                    local_url: url.clone(),
+                    original_url: original_url.to_string(),
+                    origin_tool: origin_tool.to_string(),
+                    origin_note: origin_note.clone(),
+                    note: None,
+                };
+                if let Err(e) = log::append(&slug, &preserved) {
+                    return Envelope::fail(
+                        CMD,
+                        "IO_ERROR",
+                        format!("append original_url_preserved: {e}"),
+                    );
+                }
+                let fallback_source = SessionEvent::FallbackSourceAccepted {
+                    timestamp: Utc::now(),
+                    local_url: url.clone(),
+                    original_url: original_url.to_string(),
+                    origin_tool: origin_tool.to_string(),
+                    bytes: file.size,
+                    note: origin_note,
+                };
+                if let Err(e) = log::append(&slug, &fallback_source) {
+                    return Envelope::fail(
+                        CMD,
+                        "IO_ERROR",
+                        format!("append fallback_source_accepted: {e}"),
+                    );
+                }
+            }
             accepted_results.push(json!({
                 "url": url,
                 "bytes": file.size,
+                "original_url": original_url,
+                "origin_tool": origin_tool,
+                "origin_note": origin_note,
             }));
         } else {
             failure_results.push(json!({
@@ -139,7 +194,12 @@ pub fn run(
             "caps": {
                 "max_file_bytes": file_cap,
                 "max_total_bytes": total_cap,
-            }
+            },
+            "fallback": {
+                "original_url": original_url,
+                "origin_tool": origin_tool,
+                "origin_note": origin_note,
+            },
         }),
     )
     .with_context(json!({ "session": slug }))

@@ -147,11 +147,34 @@ surprises.
 
 Future spec: `specs/research-runtime-version-gates.spec.md`
 
+## Priority 7: Hand Health And Fallback Provenance
+
+Goal: make failed hands visible in the session evidence trail and preserve the
+relationship between local fallback files and their original URLs.
+
+- Add layered actionbook checks to `doctor --tool-smoke` instead of collapsing
+  browser health into one `list-sessions` probe.
+- Add `add-local --original-url`, `--origin-tool`, and `--origin-note`.
+- Record fallback provenance events in `session.jsonl` so `audit` can explain
+  why local ingest was used.
+- Coordinate with actionbook to add first-class `browser doctor --json`,
+  `browser doctor --start --json`, `browser restart --json`, and browser daemon
+  logs.
+- Treat source notes as lower-confidence fallback artifacts until original URLs
+  are fetched directly.
+
+Expected effect: when postagent/actionbook/proxy fails, agents can continue
+research without losing provenance or hiding the degraded evidence path.
+
+Spec: `specs/research-hand-fallback.spec.md`
+
+Companion spec: `specs/actionbook-browser-hand.spec.md`
+
 ## Release Grouping
 
 - `0.3.1`: Priority 0, 1, 2. This is the safest patch/minor follow-up because
   it tightens validation without changing the report model.
 - `0.4.0`: Priority 3 and 4. These extend the event schema and fact-check
   model, so they deserve a larger release boundary.
-- `0.4.x`: Priority 5 and 6. Migration and version gates can ship once the new
-  completion protocol is stable.
+- `0.4.x`: Priority 5, 6, and 7. Migration, version gates, and hand fallback
+  provenance can ship once the new completion protocol is stable.

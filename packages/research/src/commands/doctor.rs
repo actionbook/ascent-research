@@ -337,11 +337,46 @@ fn tool_smoke_checks(postagent: &BinResolution, actionbook: &BinResolution) -> V
                 "actionbook --version",
             ));
             checks.push(check_command(
+                "actionbook_browser_doctor",
+                path,
+                &["browser", "doctor", "--json"],
+                false,
+                "actionbook browser doctor --json",
+            ));
+            checks.push(check_command(
+                "actionbook_browser_doctor_startable",
+                path,
+                &["browser", "doctor", "--start", "--json"],
+                false,
+                "actionbook browser doctor --start --json",
+            ));
+            checks.push(check_command(
                 "actionbook_browser_list_sessions",
                 path,
                 &["browser", "list-sessions", "--json"],
                 true,
                 "actionbook browser list-sessions --json",
+            ));
+            let list_ok = checks
+                .iter()
+                .rev()
+                .find(|check| check.name == "actionbook_browser_list_sessions")
+                .map(|check| check.ok)
+                .unwrap_or(false);
+            checks.push(derived_actionbook_layer(
+                "actionbook_cdp_connectable",
+                list_ok,
+                "derived from actionbook browser list-sessions request/response health",
+            ));
+            checks.push(derived_actionbook_layer(
+                "actionbook_page_fetchable",
+                false,
+                "not exercised by doctor; verified during `ascent-research add <url>` browser fallback",
+            ));
+            checks.push(derived_actionbook_layer(
+                "actionbook_readable_extractable",
+                false,
+                "not exercised by doctor yet; browser readable extraction is verified during actual fetch",
             ));
         }
         _ => checks.push(DoctorCheck {
@@ -352,6 +387,15 @@ fn tool_smoke_checks(postagent: &BinResolution, actionbook: &BinResolution) -> V
         }),
     }
     checks
+}
+
+fn derived_actionbook_layer(name: &'static str, ok: bool, detail: &str) -> DoctorCheck {
+    DoctorCheck {
+        name,
+        ok,
+        required: false,
+        detail: detail.to_string(),
+    }
 }
 
 fn check_command(

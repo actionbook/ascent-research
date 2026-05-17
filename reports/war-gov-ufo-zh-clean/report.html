@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UFO 报告深度调研：war.gov/UFO 官方资料（clean）</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f4ed;
+      --color-paper-2: #efeee5;
+      --color-ink:     #0b0d0b;
+      --color-muted:   #52534e;
+      --color-soft:    #65655c;
+      --color-rule:    rgba(11,13,11,0.10);
+      --color-accent:  #f7591f;
+      --color-link:    #1a70c7;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    html, body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      line-height: 1.6;
+    }
+    body { padding: 3rem 2rem 6rem; }
+    .frame { max-width: 980px; margin: 0 auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(2rem, 3vw + 1rem, 2.8rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 0.5rem;
+    }
+    h2 {
+      font-family: var(--font-serif);
+      font-size: 1.6rem;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      margin: 2.8rem 0 0.6rem;
+      display: flex;
+      align-items: baseline;
+      gap: 0.8rem;
+    }
+    h2 .section-num {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.15em;
+      color: var(--color-accent);
+    }
+    h3 {
+      font-family: var(--font-sans);
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin: 1.8rem 0 0.4rem;
+      letter-spacing: -0.005em;
+    }
+    p {
+      font-size: 0.98rem;
+      margin-bottom: 0.9rem;
+      color: var(--color-ink);
+    }
+    .sub {
+      font-family: var(--font-sans);
+      font-size: 0.92rem;
+      color: var(--color-muted);
+      margin-bottom: 2rem;
+    }
+    .sub a, .sub a:visited {
+      color: var(--color-link);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    .aside {
+      font-family: var(--font-serif);
+      font-style: italic;
+      font-size: 1.05rem;
+      color: var(--color-soft);
+      border-left: 2px solid var(--color-accent);
+      padding: 0.4rem 0 0.4rem 1rem;
+      margin: 1.4rem 0;
+    }
+
+    code, kbd {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      background: rgba(11,13,11,0.05);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    pre {
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      background: #ffffff;
+      border: 1px solid var(--color-rule);
+      border-radius: 6px;
+      padding: 0.9rem 1rem;
+      overflow-x: auto;
+      margin: 0.6rem 0 1.2rem;
+      line-height: 1.5;
+    }
+    pre code { background: transparent; padding: 0; }
+
+    ul { margin: 0.4rem 0 1rem 1.4rem; }
+    li { margin-bottom: 0.3rem; font-size: 0.96rem; }
+
+    a, a:visited {
+      color: var(--color-link);
+      text-decoration: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+    a:hover { color: var(--color-accent); }
+
+    .diagram {
+      background: var(--color-paper-2);
+      border: 1px solid var(--color-rule);
+      border-radius: 8px;
+      padding: 1.2rem 1rem;
+      margin: 1.2rem 0 1.6rem;
+    }
+    .diagram svg { display: block; width: 100%; min-width: 600px; }
+    .caption {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      color: var(--color-muted);
+      text-transform: uppercase;
+      margin-top: 0.6rem;
+      text-align: center;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.8rem 0 1.6rem;
+      font-size: 0.94rem;
+    }
+    table th, table td {
+      text-align: left;
+      padding: 0.55rem 0.9rem;
+      border-bottom: 1px solid var(--color-rule);
+      vertical-align: top;
+    }
+    table th {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      font-weight: 500;
+      border-bottom: 1px solid rgba(11,13,11,0.2);
+    }
+
+    .sources {
+      margin-top: 3rem;
+      padding-top: 1.6rem;
+      border-top: 1px solid var(--color-rule);
+    }
+    .sources h2 { margin-top: 0; }
+    .sources ul { list-style: none; margin-left: 0; }
+    .sources li {
+      font-size: 0.88rem;
+      font-family: var(--font-mono);
+      padding: 0.3rem 0;
+      display: flex;
+      gap: 0.8rem;
+    }
+    .sources .kind {
+      color: var(--color-muted);
+      flex-shrink: 0;
+      width: 10em;
+    }
+
+    hr {
+      border: 0;
+      border-top: 1px solid var(--color-rule);
+      margin: 2.4rem 0;
+    }
+    .footer {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: var(--color-muted);
+      letter-spacing: 0.1em;
+      text-align: center;
+      margin-top: 4rem;
+    }
+
+    /* v3: wiki pages — one .wiki-page per entity / concept / source
+       summary. Grouped under .wiki-root between the numbered sections
+       and Sources. */
+    .wiki-root {
+      margin-top: 3rem;
+      padding-top: 1.6rem;
+      border-top: 1px solid var(--color-rule);
+    }
+    .wiki-root > h2 { margin-top: 0; }
+    .wiki-toc {
+      background: var(--color-paper-2);
+      border: 1px solid var(--color-rule);
+      border-radius: 6px;
+      padding: 1rem 1.1rem 1.2rem;
+      margin: 1rem 0 2rem;
+    }
+    .wiki-toc-label {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.6rem;
+    }
+    .wiki-toc ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.3rem 0.9rem;
+    }
+    .wiki-toc li { margin: 0; }
+    .wiki-toc a {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      padding: 0.3rem 0;
+      text-decoration: none;
+      border-bottom: 1px dotted transparent;
+      color: var(--color-ink);
+    }
+    .wiki-toc a:hover { border-bottom-color: var(--color-accent); }
+    .wiki-toc-kind {
+      font-family: var(--font-mono);
+      font-size: 0.64rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      background: rgba(11,13,11,0.04);
+      padding: 1px 6px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      min-width: 5.5em;
+      text-align: center;
+    }
+    .wiki-toc-name {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      font-weight: 500;
+      flex-grow: 1;
+    }
+    .wiki-toc-updated {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--color-muted);
+    }
+    .wiki-page {
+      margin: 1.6rem 0 2rem;
+      padding-left: 1rem;
+      border-left: 2px solid var(--color-rule);
+    }
+    .wiki-page > h3 {
+      font-family: var(--font-serif);
+      font-size: 1.25rem;
+      margin: 0 0 0.4rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 1rem;
+    }
+    .wiki-page-back {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      text-decoration: none;
+      font-weight: 400;
+      padding: 0.15rem 0.5rem;
+      border: 1px solid var(--color-rule);
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+    .wiki-page-back:hover {
+      color: var(--color-accent);
+      border-color: var(--color-accent);
+    }
+    .wiki-link {
+      text-decoration: none;
+      border-bottom: 1px dotted var(--color-accent);
+    }
+    .wiki-broken {
+      color: var(--color-accent);
+      background: rgba(247,89,31,0.08);
+      padding: 0 3px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+      font-size: 0.82em;
+    }
+
+    /* Diagram placeholder — author referenced a diagrams/*.svg file
+       that was never written (or was rejected by svg_safety). Show a
+       graceful "pending" card instead of a broken-image icon. */
+    .diagram-missing {
+      background: repeating-linear-gradient(
+        45deg,
+        var(--color-paper-2),
+        var(--color-paper-2) 6px,
+        var(--color-paper) 6px,
+        var(--color-paper) 12px
+      );
+      border: 1px dashed var(--color-rule);
+      text-align: center;
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .diagram-missing-label {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-accent);
+      margin-bottom: 0.4rem;
+    }
+
+    /* Bilingual toggle — default hides .tr-zh; clicking 中文 reveals
+       each Chinese paragraph directly below its English sibling. */
+    .lang-switch {
+      position: sticky;
+      top: 1rem;
+      float: right;
+      display: flex;
+      gap: 0;
+      background: var(--color-paper);
+      border: 1px solid var(--color-rule);
+      border-radius: 999px;
+      padding: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      z-index: 10;
+    }
+    .lang-switch button {
+      border: 0;
+      background: transparent;
+      color: var(--color-muted);
+      padding: 0.35rem 0.85rem;
+      cursor: pointer;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: inherit;
+      letter-spacing: inherit;
+    }
+    .lang-switch button.active {
+      background: var(--color-ink);
+      color: var(--color-paper);
+    }
+    .lang-switch button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    .tr-zh {
+      display: none;
+      color: var(--color-muted);
+      font-size: 0.94rem;
+      margin-top: -0.4rem;
+      margin-bottom: 0.9rem;
+      padding-left: 0.75rem;
+      border-left: 2px solid var(--color-accent);
+    }
+    body.bilingual .tr-zh {
+      display: block;
+    }
+    body.bilingual .tr-zh:empty {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="lang-switch" role="group" aria-label="language toggle">
+    <button type="button" data-mode="en" class="active" onclick="document.body.classList.remove('bilingual'); this.classList.add('active'); this.nextElementSibling.classList.remove('active');">EN</button><button type="button" data-mode="zh" onclick="document.body.classList.add('bilingual'); this.classList.add('active'); this.previousElementSibling.classList.remove('active');">中文</button>
+  </div>
+  <div class="frame">
+
+    <p class="eyebrow">Research report</p>
+    <h1>UFO 报告深度调研：war.gov/UFO 官方资料（clean）</h1>
+    <p class="sub">Session: <code>war-gov-ufo-zh-clean</code> · tagged fact-check · preset <code>tech</code></p>
+
+    
+
+    <h2>Overview</h2>
+<p>这批 PURSUE Release 01 文件最重要的含义，不是美国政府“确认外星生命”，而是官方把一组 unresolved UAP records、索引 metadata、历史案卷和若干近期军事/外交记录放到同一公开入口下，供公众检查其来源、删节、时间线和证据质量。</p><p class="tr-zh" lang="zh-CN">这批 PURSUE Release 01 文件最重要的含义，不是美国政府“确认外星生命”，而是官方把一组 unresolved UAP records、索引 metadata、历史案卷和若干近期军事/外交记录放到同一公开入口下，供公众检查其来源、删节、时间线和证据质量。</p>
+
+<p>判断这批材料时，应把证据分成几层：官方入口页和 CSV 索引说明“释放了哪些文件”；PDF 原文和 pdftotext 抽取文本说明“文件内部如何表述事件”；而目击叙述、任务日志中的 UAP 字样、邮件 tearlines 或历史电报，只能说明相关人员记录了未识别现象，不能自动推出现象具备非人技术、异常机动能力或外星来源。</p><p class="tr-zh" lang="zh-CN">判断这批材料时，应把证据分成几层：官方入口页和 CSV 索引说明“释放了哪些文件”；PDF 原文和 pdftotext 抽取文本说明“文件内部如何表述事件”；而目击叙述、任务日志中的 UAP 字样、邮件 tearlines 或历史电报，只能说明相关人员记录了未识别现象，不能自动推出现象具备非人技术、异常机动能力或外星来源。</p>
+
+<p>因此，本报告采用结论先行但证据分层的写法：先说明 release 的结构，再用代表性案例展示不同文件类型的证据强弱，最后给出公众阅读这类 UAP 材料时可执行的判断框架。</p><p class="tr-zh" lang="zh-CN">因此，本报告采用结论先行但证据分层的写法：先说明 release 的结构，再用代表性案例展示不同文件类型的证据强弱，最后给出公众阅读这类 UAP 材料时可执行的判断框架。</p>
+
+<h2>Plan</h2>
+<p>Goal: 产出一份中文深度调研报告，基于 war.gov/UFO PURSUE Release 01 官方页面、CSV 索引和代表性 PDF/文本记录，解释这批 UAP/UFO 文件释放了什么、没有证明什么，以及公众应如何按证据质量判断。Sources: 先消化已接受来源，包括官方 PURSUE 页面、CSV metadata、代表性 PDF/pdftotext 抽取文本；必要时再补 AARO 背景、官方文件入口和少量公开讨论来源，但不以传闻替代原始材料。Milestones: iter 2-4 消化官方入口、CSV 与关键案例并写 wiki；iter 5-6 完成事实核查、机构/类型/时间结构图和三段以上正文；iter 7-8 综合成结论先行的中文报告，明确区分 unresolved records、目击陈述和“外星生命确认”之间的边界。</p><p class="tr-zh" lang="zh-CN">目标：产出一份中文深度调研报告，基于 war.gov/UFO PURSUE Release 01 官方页面、CSV 索引和代表性 PDF/文本记录，解释这批 UAP/UFO 文件释放了什么、没有证明什么，以及公众应如何按证据质量判断。来源：先消化已接受来源，包括官方 PURSUE 页面、CSV metadata、代表性 PDF/pdftotext 抽取文本；必要时再补充 AARO 背景、官方文件入口和少量公开讨论来源，但不以传闻替代原始材料。里程碑：iter 2-4 消化官方入口、CSV 与关键案例并写 wiki；iter 5-6 完成事实核查、机构/类型/时间结构图和三段以上正文；iter 7-8 综合成结论先行的中文报告，明确区分 unresolved records、目击陈述和“外星生命确认”之间的边界。</p>
+
+<h2><span class="section-num">01</span><span>RELEASE 结构</span></h2>
+<p>这批材料首先应被理解为一个“官方文件释放包”，而不是一个结论包。CSV 索引把每个条目拆成 release date、标题、类型、机构、事件日期、地点、说明 blurb 和媒体链接等字段；因此它最可靠的用途，是回答“释放了哪些文件、由哪些机构提供、以什么媒介形态出现”，而不是直接回答“这些现象是什么”。这一点对读者很关键：metadata 可以建立检索框架，但不能替代 PDF 原文、图像/视频链路和任务报告中的证据质量判断。</p><p class="tr-zh" lang="zh-CN">这批材料首先应被理解为一个“官方文件释放包”，而不是一个结论包。CSV 索引把每个条目拆成 release date、标题、类型、机构、事件日期、地点、说明 blurb 和媒体链接等字段；因此它最可靠的用途，是回答“释放了哪些文件、由哪些机构提供、以什么媒介形态出现”，而不是直接回答“这些现象是什么”。这一点对读者很关键：metadata 可以建立检索框架，但不能替代 PDF 原文、图像/视频链路和任务报告中的证据质量判断。</p>
+
+<p><div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 420"><rect width="920" height="420" fill="#f7f7f2"/><text x="460" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" fill="#1f2933">PURSUE Release 01: 从索引到证据判断</text><rect x="40" y="90" width="190" height="230" rx="8" fill="#ffffff" stroke="#374151"/><text x="135" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#111827">官方入口页</text><text x="135" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">release 声明</text><text x="135" y="178" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">下载路径</text><text x="135" y="202" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">页面上下文</text><rect x="270" y="90" width="190" height="230" rx="8" fill="#ffffff" stroke="#374151"/><text x="365" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#111827">CSV 索引</text><text x="365" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">Release Date</text><text x="365" y="178" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">Agency / Type</text><text x="365" y="202" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">PDF / Image / Video links</text><rect x="500" y="90" width="190" height="230" rx="8" fill="#ffffff" stroke="#374151"/><text x="595" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#111827">原始记录</text><text x="595" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">FBI 历史案卷</text><text x="595" y="178" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">任务报告文本</text><text x="595" y="202" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">图像 / 视频 pairing</text><rect x="730" y="90" width="150" height="230" rx="8" fill="#ffffff" stroke="#374151"/><text x="805" y="122" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#111827">判断边界</text><text x="805" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">可信结论</text><text x="805" y="178" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">有限结论</text><text x="805" y="202" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#4b5563">不能得出的结论</text><path d="M230 205 H270" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow)"/><path d="M460 205 H500" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow)"/><path d="M690 205 H730" stroke="#2563eb" stroke-width="3" marker-end="url(#arrow)"/><rect x="84" y="348" width="752" height="36" rx="6" fill="#e5e7eb"/><text x="460" y="371" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#111827">核心原则：索引说明“释放了什么”；原文和媒体链路决定“证据能支持什么”；unresolved 不等于 extraterrestrial confirmed。</text><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/></marker></defs></svg><p class="caption">PURSUE Release 01 结构图</p><p class="tr-zh" lang="zh-CN">PURSUE Release 01：从索引到证据判断   官方入口页  release 声明  下载路径  页面上下文   CSV 索引  Release Date  Agency / Type  PDF / Image / Video links   原始记录  FBI 历史案卷  任务报告文本  图像 / 视频 pairing   判断边界  可信结论  有限结论  不能得出的结论      核心原则：索引说明“释放了什么”；原文和媒体链路决定“证据能支持什么”；unresolved 不等于 extraterrestrial confirmed。        PURSUE Release 01 结构图</p>
+</div></p>
+<p>基于 CSV，<code>Release Date</code> 指向 5/8/26，release 的条目横跨 FBI 历史案卷与 Department of War/USCENTCOM 现代任务材料等来源。FBI <code>62-HQ-83894</code> 分段尤其说明了“unresolved UAP records”的边界：这些记录包含调查材料、目击证词、公众报告、照片和媒体材料，但这些材料本身只证明政府曾收集、保存并重新释放相关档案；它们不能自动升级为“政府确认外星生命”或“确认异常技术”。后续报告应把索引当作地图，把 PDF/文本当作证据层，把 AARO 或官方背景材料当作解释层。</p><p class="tr-zh" lang="zh-CN">基于 CSV，Release Date 指向 5/8/26，release 的条目横跨 FBI 历史案卷与 Department of War/USCENTCOM 现代任务材料等来源。FBI 62-HQ-83894 分段尤其说明了“unresolved UAP records”的边界：这些记录包含调查材料、目击证词、公众报告、照片和媒体材料，但这些材料本身只证明政府曾收集、保存并重新释放相关档案；它们不能自动升级为“政府确认外星生命”或“确认异常技术”。后续报告应把索引当作地图，把 PDF/文本当作证据层，把 AARO 或官方背景材料当作解释层。</p>
+
+<p>来源：<a href="file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv">官方 CSV 索引</a>。</p><p class="tr-zh" lang="zh-CN">来源：官方 CSV 索引。</p>
+
+<h2><span class="section-num">02</span><span>CASE EVIDENCE</span></h2>
+<p>Syria 2024 任务记录的价值在于，它展示了近期军事任务文本中如何把一次 UAP 观察嵌入常规 ISR/FMV/SIGINT 任务叙述，而不是把 UAP 单独包装成完整技术结论。文本显示，任务叙述包含起飞、on-station、FMV/SIGINT collection、返回基地等任务流程，并在 1559Z 记录一次“unidentified aerial phenomenon”；同一页还出现大量依据分类理由和 FOIA 豁免的删节。这说明该文件的强证据部分是“官方任务材料中存在一次 UAP 记录”，弱证据部分则是 UAP 的性质、轨迹、传感器细节和解释，因为这些内容要么被删节，要么没有在抽取文本中形成可独立验证的完整链条。来源：<a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt">Syria 2024 mission report text</a>。</p><p class="tr-zh" lang="zh-CN">Syria 2024 任务记录的价值在于，它展示了近期军事任务文本中如何把一次 UAP 观察嵌入常规 ISR/FMV/SIGINT 任务叙述，而不是把 UAP 单独包装成完整技术结论。文本显示，任务叙述包含起飞、on-station、FMV/SIGINT collection、返回基地等任务流程，并在 1559Z 记录一次“unidentified aerial phenomenon”；同一页还出现大量依据分类理由和 FOIA 豁免的删节。这说明该文件的强证据部分是“官方任务材料中存在一次 UAP 记录”，弱证据部分则是 UAP 的性质、轨迹、传感器细节和解释，因为这些内容要么被删节，要么没有在抽取文本中形成可独立验证的完整链条。来源：Syria 2024 mission report text。</p>
+
+<p>可信结论：这是一份来自官方释放材料的任务文本，里面出现了 UAP 观察条目。有限结论：它能支持“某次军事任务记录了 unidentified aerial phenomenon”，但不能单独证明该现象具有异常物理能力。不能得出的结论：不能把这类 mission narrative 直接解读为官方确认外星生命、非人飞行器或突破性技术。</p><p class="tr-zh" lang="zh-CN">可信结论：这是一份来自官方释放材料的任务文本，里面出现了 UAP 观察条目。有限结论：它能支持“某次军事任务记录了 unidentified aerial phenomenon”，但不能单独证明该现象具有异常物理能力。不能得出的结论：不能把这类 mission narrative 直接解读为官方确认外星生命、非人飞行器或突破性技术。</p>
+
+<h2><span class="section-num">03</span><span>案例如何读</span></h2>
+<p>INDOPACOM 2025 tearlines 是理解这批 release 的一个好例子：它看起来来自较高密级邮件链，但最终公开给读者的，是经过确认可降到 UNCLASSIFIED 的极短摘要，而不是完整侦察材料。文件称 2025 年 4 月 10 日与 4 月 11 日各有一次 US aircraft 观察到 possible UAP，持续时间分别为 12 秒和 23 秒，高度、速度均未知，且公开摘要称 no interference was noted；这些信息来自 [[indopacom-2025-tearlines]] 与原始抽取文本 <a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt">dow-uap-d50-indopacom-2025.txt</a>。</p><p class="tr-zh" lang="zh-CN">INDOPACOM 2025 tearlines 是理解这批 release 的一个好例子：它看起来来自较高密级邮件链，但最终公开给读者的，是经过确认可降到 UNCLASSIFIED 的极短摘要，而不是完整侦察材料。文件称 2025 年 4 月 10 日与 4 月 11 日各有一次 US aircraft 观察到 possible UAP，持续时间分别为 12 秒和 23 秒，高度、速度均未知，且公开摘要称 no interference was noted；这些信息来自 [[indopacom-2025-tearlines]] 与原始抽取文本 dow-uap-d50-indopacom-2025.txt。</p>
+
+<p>这类材料的判断边界很窄。可信结论是：官方 release 中存在两条 INDOPACOM 相关、可公开的短时 possible UAP 观察摘要。有限结论是：摘要没有记录干扰，也没有给出高度和速度。不能得出的结论是：对象完成了反常机动、具有非人类来源，或已经被技术分析排除为飞机、气球、天体、光学效应、传感器误差或训练/作战背景下的误识别。换句话说，它证明“官方系统收到了并释放了 unresolved/possible UAP 记录”，不证明“官方确认外星生命”。</p><p class="tr-zh" lang="zh-CN">这类材料的判断边界很窄。可信结论是：官方 release 中存在两条 INDOPACOM 相关、可公开的短时 possible UAP 观察摘要。有限结论是：摘要没有记录干扰，也没有给出高度和速度。不能得出的结论是：对象完成了反常机动、具有非人类来源，或已经被技术分析排除为飞机、气球、天体、光学效应、传感器误差或训练/作战背景下的误识别。换句话说，它证明“官方系统收到了并释放了 unresolved/possible UAP 记录”，不证明“官方确认外星生命”。</p>
+
+<h2><span class="section-num">04</span><span>CASES</span></h2>
+<h3>Western U.S. Event：强叙事，不等于强物证</h3>
+<p>[[western-us-event-2023]] 是这批材料中最容易被公众误读的一类案例：文本说的是多名联邦执法人员在 Western U.S. 黄昏时段目击橙色“orb”释放红色“orbs”，另有两名人员称在约 500-600 米距离看到接近岩石尖峰的发光橙色物体。原始材料来自 <a href="file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt">western-us-event-2023.txt</a>。</p><p class="tr-zh" lang="zh-CN">[[western-us-event-2023]] 是这批材料中最容易被公众误读的一类案例：文本说的是多名联邦执法人员在 Western U.S. 黄昏时段目击橙色“orb”释放红色“orbs”，另有两名人员称在约 500-600 米距离看到接近岩石尖峰的发光橙色物体。原始材料来自 western-us-event-2023.txt。</p>
+
+<p>可信结论：这是一份官方释放体系中的目击记录，包含多个观察者、地点差异、时间段和外观描述。有限结论：它能说明官方档案中确有未解释或未完整解释的目击叙述。不能得出的结论：仅凭这份文本，不能推出该现象是外星生命、非人类技术，或已经排除了飞机、照明、无人机、烟火、传感误差、距离误判等常规解释。</p><p class="tr-zh" lang="zh-CN">可信结论：这是一份官方释放体系中的目击记录，包含多个观察者、地点差异、时间段和外观描述。有限结论：它能说明官方档案中确有未解释或未完整解释的目击叙述。不能得出的结论：仅凭这份文本，不能推出该现象是外星生命、非人类技术，或已经排除了飞机、照明、无人机、烟火、传感误差、距离误判等常规解释。</p>
+
+<p>这个案例的正确读法，是把“证人数量”和“叙述细节”视为线索强度，而不是物理证明强度。对于科普读者，它是判断证据质量的好样本：越戏剧化的描述，越需要追问有没有原始影像、雷达/红外链路、时间同步、传感器元数据和独立技术复核。</p><p class="tr-zh" lang="zh-CN">这个案例的正确读法，是把“证人数量”和“叙述细节”视为线索强度，而不是物理证明强度。对于科普读者，它是判断证据质量的好样本：越戏剧化的描述，越需要追问有没有原始影像、雷达/红外链路、时间同步、传感器元数据和独立技术复核。</p>
+
+<h2><span class="section-num">05</span><span>官方框架与薄证据样本</span></h2>
+<p><a href="https://www.war.gov/UFO/">PURSUE 官方入口页</a> 的主要作用是定义发布框架：它告诉读者这批材料被放在 “Presidential Unsealing and Reporting System for UAP Encounters” 下，并以 Release 01 的形式集中展示。入口页能证明“政府设立了公开入口并释放相关记录”，但不能证明每一条记录都已经完成科学鉴定。</p><p class="tr-zh" lang="zh-CN">PURSUE 官方入口页的主要作用是定义发布框架：它告诉读者这批材料被放在 “Presidential Unsealing and Reporting System for UAP Encounters” 下，并以 Release 01 的形式集中展示。入口页能证明“政府设立了公开入口并释放相关记录”，但不能证明每一条记录都已经完成科学鉴定。</p>
+
+<p><a href="https://www.aaro.mil/">AARO 官网</a> 则提供制度背景：UAP 资料已经进入专门机构、公开记录、案例页面、FAQ 和报告入口等流程。这个背景有助于理解为什么 UAP 文件会被整理和释放，但它不能替代 PURSUE CSV 或 PDF 原文来证明某个个案的事实细节。</p><p class="tr-zh" lang="zh-CN">AARO 官网则提供制度背景：UAP 资料已经进入专门机构、公开记录、案例页面、FAQ 和报告入口等流程。这个背景有助于理解为什么 UAP 文件会被整理和释放，但它不能替代 PURSUE CSV 或 PDF 原文来证明某个个案的事实细节。</p>
+
+<p>Kuwait 2022 的 PR20 文本是一个“薄证据样本”。抽取文本 <a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt">dow-uap-pr20-kuwait-2022.txt</a> 主要保留公开审查、USCENTCOM 推荐和发布审批信息，几乎没有可用于重建事件的细节。它提醒读者：release 中的每个 PDF 并不都同等丰富，有些条目只能支持“存在一个被释放的记录壳和审批链”，不能支持关于目标性质的强判断。</p><p class="tr-zh" lang="zh-CN">Kuwait 2022 的 PR20 文本是一个“薄证据样本”。抽取文本 dow-uap-pr20-kuwait-2022.txt 主要保留公开审查、USCENTCOM 推荐和发布审批信息，几乎没有可用于重建事件的细节。它提醒读者：release 中的每个 PDF 并不都同等丰富，有些条目只能支持“存在一个被释放的记录壳和审批链”，不能支持关于目标性质的强判断。</p>
+
+<h2><span class="section-num">06</span><span>历史电报与结论边界</span></h2>
+<p>巴布亚新几内亚 1985 年电报代表的是历史外交记录层。抽取文本 <a href="file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt">dos-papua-new-guinea-1985.txt</a> 显示，美国驻莫尔兹比港使馆收到 PNG 国家情报组织关于高空、高速飞行器目击的询问，并将其纳入外交通信链。</p><p class="tr-zh" lang="zh-CN">巴布亚新几内亚 1985 年电报代表的是历史外交记录层。抽取文本 dos-papua-new-guinea-1985.txt 显示，美国驻莫尔兹比港使馆收到 PNG 国家情报组织关于高空、高速飞行器目击的询问，并将其纳入外交通信链。</p>
+
+<p>可信结论是：该事件曾被地方机构、美国使馆和后续信息链条记录。有限结论是：它提供了时间、地点、转报对象和叙事来源。不能得出的结论是：电报本身没有提供可复核雷达、轨迹、传感器数据、残骸或独立物理分析，因此不能从“有正式电报记录”跳到“确认非人技术”。</p><p class="tr-zh" lang="zh-CN">可信结论是：该事件曾被地方机构、美国使馆和后续信息链条记录。有限结论是：它提供了时间、地点、转报对象和叙事来源。不能得出的结论是：电报本身没有提供可复核雷达、轨迹、传感器数据、残骸或独立物理分析，因此不能从“有正式电报记录”跳到“确认非人技术”。</p>
+
+
+<section class="wiki-root"><h2><span class="section-num">WIKI</span><span>Entity & concept pages</span></h2><nav class="wiki-toc" id="wiki-toc-anchor" aria-label="wiki pages"><p class="wiki-toc-label">6 pages · click to jump</p><p class="tr-zh" lang="zh-CN">6 页 · 点击跳转</p>
+<ul><li><a href="#wiki-aaro"><span class="wiki-toc-kind">entity</span><span class="wiki-toc-name">aaro</span><span class="wiki-toc-updated">2026-05-09</span></a></li><li><a href="#wiki-indopacom-2025-tearlines"><span class="wiki-toc-kind">entity</span><span class="wiki-toc-name">indopacom-2025-tearlines</span><span class="wiki-toc-updated">2026-05-09</span></a></li><li><a href="#wiki-pursue-release-01"><span class="wiki-toc-kind">entity</span><span class="wiki-toc-name">pursue-release-01</span><span class="wiki-toc-updated">2026-05-09</span></a></li><li><a href="#wiki-source-local-uap-csv"><span class="wiki-toc-kind">source-summary</span><span class="wiki-toc-name">source-local-uap-csv</span><span class="wiki-toc-updated">2026-05-09</span></a></li><li><a href="#wiki-syria-2024-mission-report"><span class="wiki-toc-kind">entity</span><span class="wiki-toc-name">syria-2024-mission-report</span><span class="wiki-toc-updated">2026-05-09</span></a></li><li><a href="#wiki-western-us-event-2023"><span class="wiki-toc-kind">entity</span><span class="wiki-toc-name">western-us-event-2023</span><span class="wiki-toc-updated">2026-05-09</span></a></li></ul></nav><section class="wiki-page" id="wiki-aaro"><h3>AARO <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>AARO</h1>
+<p>AARO（All-domain Anomaly Resolution Office）是理解 <a class="wiki-link" href="#wiki-pursue-release-01">pursue-release-01</a> 的背景入口之一：它的官网把自身定位为美国政府处理 UAP 的办公室，并强调以严谨科学框架和数据驱动方法处理 Unidentified Anomalous Phenomena。这个定位很重要，因为它说明官方话语的重心是“收集、整理、分析和解释异常报告”，而不是把未解决记录直接等同于外星生命或外星技术确认。</p><p class="tr-zh" lang="zh-CN">AARO（All-domain Anomaly Resolution Office）是理解 pursue-release-01 的背景入口之一：它的官网把自身定位为美国政府处理 UAP 的办公室，并强调以严谨科学框架和数据驱动方法处理 Unidentified Anomalous Phenomena。这个定位很重要，因为它说明官方话语的重心是“收集、整理、分析和解释异常报告”，而不是把未解决记录直接等同于外星生命或外星技术确认。</p>
+
+<p>从证据分层看，<a href="https://www.aaro.mil/">AARO 官网</a>属于官方背景页，可信度适合用来说明机构职责、术语框架和公众入口；但它本身不是某个具体案例的原始证据。对具体事件仍应回到 release CSV、PDF 原文或 pdftotext 抽取文本。报告中应把 AARO 作为解释框架来源，而不是把它当作所有案例事实的证明来源。</p><p class="tr-zh" lang="zh-CN">从证据分层看，AARO 官网属于官方背景页，可信度适合用来说明机构职责、术语框架和公众入口；但它本身不是某个具体案例的原始证据。对具体事件仍应回到 release CSV、PDF 原文或 pdftotext 抽取文本。报告中应把 AARO 作为解释框架来源，而不是把它当作所有案例事实的证明来源。</p>
+
+<p>可信结论：AARO 是官方 UAP 议题的制度化处理入口之一，官网明确采用科学和数据驱动表述。有限结论：这能说明美国政府对 UAP 记录有 formal process，但不能说明某个案例已被证明为异常技术。不能得出的结论：AARO 或 PURSUE release 的存在不等于官方确认外星生命。</p><p class="tr-zh" lang="zh-CN">可信结论：AARO 是官方 UAP 议题的制度化处理入口之一，官网明确采用科学和数据驱动表述。有限结论：这能说明美国政府对 UAP 记录有 formal process，但不能说明某个案例已被证明为异常技术。不能得出的结论：AARO 或 PURSUE release 的存在不等于官方确认外星生命。</p>
+
+</section><section class="wiki-page" id="wiki-indopacom-2025-tearlines"><h3>INDOPACOM 2025 tearlines <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>INDOPACOM 2025 tearlines</h1>
+<p>该文件是一组围绕 INDOPACOM AOR 与 1.4(a) tearlines 去密级化/公开表述的邮件摘录，来源为本地抽取文本：<a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt">dow-uap-d50-indopacom-2025.txt</a>。它的核心信息不是“确认异常技术”，而是说明某些原本处在 SECRET//NOFORN 邮件上下文中的简短 UAP 描述，被确认可作为 UNCLASSIFIED 级别文字使用。</p><p class="tr-zh" lang="zh-CN">该文件是一组围绕 INDOPACOM AOR 与 1.4(a) tearlines 去密级化/公开表述的邮件摘录，来源为本地抽取文本：dow-uap-d50-indopacom-2025.txt。它的核心信息不是“确认异常技术”，而是说明某些原本处在 SECRET//NOFORN 邮件上下文中的简短 UAP 描述，被确认可作为 UNCLASSIFIED 级别文字使用。</p>
+
+<p>文本给出两条可公开 tearline：一条称 10APR25，US aircraft observed 1x possible UAP for 12 seconds at 2353Z，未知高度、未知速度，未 noted interference；另一条称 11APR25，US aircraft observed 1x possible UAP for 23 seconds at 0007Z，同样未知高度、未知速度，未 noted interference。两条都位于 INDOPACOM 相关 AOR 语境中，但没有提供传感器类型、图像、轨迹解算、地理坐标、平台型号或后续分析结论。</p><p class="tr-zh" lang="zh-CN">文本给出两条可公开 tearline：一条称 10APR25，US aircraft observed 1x possible UAP for 12 seconds at 2353Z，未知高度、未知速度，未 noted interference；另一条称 11APR25，US aircraft observed 1x possible UAP for 23 seconds at 0007Z，同样未知高度、未知速度，未 noted interference。两条都位于 INDOPACOM 相关 AOR 语境中，但没有提供传感器类型、图像、轨迹解算、地理坐标、平台型号或后续分析结论。</p>
+
+<p>证据分层上，它适合被归为“官方元数据/公开话术确认 + 极短事件摘要”，而不是完整案例档案。可信结论是：文件记录了两次可能 UAP 的短时观察，并确认相关摘要可非密发布；有限结论是：观察持续 12 秒和 23 秒，且公开摘要称未发生干扰；不能得出的结论是：目标具有非常规性能、属于外星技术，或已经排除常规航空/传感器/环境解释。</p><p class="tr-zh" lang="zh-CN">证据分层上，它适合被归为“官方元数据/公开话术确认 + 极短事件摘要”，而不是完整案例档案。可信结论是：文件记录了两次可能 UAP 的短时观察，并确认相关摘要可非密发布；有限结论是：观察持续 12 秒和 23 秒，且公开摘要称未发生干扰；不能得出的结论是：目标具有非常规性能、属于外星技术，或已经排除常规航空/传感器/环境解释。</p>
+
+</section><section class="wiki-page" id="wiki-pursue-release-01"><h3>PURSUE Release 01 <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>PURSUE Release 01</h1>
+<p><a href="https://www.war.gov/UFO/">PURSUE 官方入口页</a>的核心作用不是证明某个 UAP/UFO 案例的物理性质，而是给出这批文件的发布框架：页面标题为 “Presidential Unsealing and Reporting System for UAP Encounters”，并设置 INTRO、ABOUT、RELEASE 01、LEARN MORE 等栏目，说明这是一个由美国政府站点承载的 UAP encounter 文件释放入口。</p><p class="tr-zh" lang="zh-CN">PURSUE 官方入口页的核心作用不是证明某个 UAP/UFO 案例的物理性质，而是给出这批文件的发布框架：页面标题为 “Presidential Unsealing and Reporting System for UAP Encounters”，并设置 INTRO、ABOUT、RELEASE 01、LEARN MORE 等栏目，说明这是一个由美国政府站点承载的 UAP encounter 文件释放入口。</p>
+
+<p>从证据分层看，该页面属于最高层级的“官方入口与发布语境”证据：它能证明政府发布了一个名为 PURSUE 的 UAP 文件释放页面，也能为 Release 01 的材料来源、页面导航和官方话术提供上下文；但它本身不能证明文件内任何目击陈述真实发生，更不能证明外星生命、非人技术或异常飞行器已经被官方确认。</p><p class="tr-zh" lang="zh-CN">从证据分层看，该页面属于最高层级的“官方入口与发布语境”证据：它能证明政府发布了一个名为 PURSUE 的 UAP 文件释放页面，也能为 Release 01 的材料来源、页面导航和官方话术提供上下文；但它本身不能证明文件内任何目击陈述真实发生，更不能证明外星生命、非人技术或异常飞行器已经被官方确认。</p>
+
+<p>报告中应把该页作为解释边界的锚点：可信结论是“官方建立了一个 UAP 文件发布入口”；有限结论是“入口页将这些材料组织为 Release 01”；不能得出的结论是“Release 01 等同于官方确认外星生命”。</p><p class="tr-zh" lang="zh-CN">报告中应把该页作为解释边界的锚点：可信结论是“官方建立了一个 UAP 文件发布入口”；有限结论是“入口页将这些材料组织为 Release 01”；不能得出的结论是“Release 01 等同于官方确认外星生命”。</p>
+
+</section><section class="wiki-page" id="wiki-source-local-uap-csv"><h3>官方 CSV 索引 <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>官方 CSV 索引</h1>
+<p>这个本地缓存的 CSV 是 <a class="wiki-link" href="#wiki-pursue-release-01">pursue-release-01</a> 的文件级 metadata 索引，字段包括 <code>Release Date</code>、<code>Title</code>、<code>Type</code>、<code>Description Blurb</code>、<code>Agency</code>、<code>Incident Date</code>、<code>Incident Location</code>、<code>PDF | Image Link</code>、<code>Video Pairing</code> 与 <code>DVIDS Video ID</code> 等。它的价值不在于证明任何 UAP 事件的物理性质，而在于给出 release 的结构化目录：哪些机构供稿、哪些条目是 PDF/图像/视频、哪些只是历史案卷或行政材料、哪些条目有可追溯的原始文件链接。</p><p class="tr-zh" lang="zh-CN">这个本地缓存的 CSV 是 pursue-release-01 的文件级 metadata 索引，字段包括 Release Date、Title、Type、Description Blurb、Agency、Incident Date、Incident Location、PDF | Image Link、Video Pairing 与 DVIDS Video ID 等。它的价值不在于证明任何 UAP 事件的物理性质，而在于给出 release 的结构化目录：哪些机构供稿、哪些条目是 PDF/图像/视频、哪些只是历史案卷或行政材料、哪些条目有可追溯的原始文件链接。</p>
+
+<p>从索引可见，FBI 条目集中在 <code>62-HQ-83894</code> 历史案卷分段，描述为 1947 年 6 月至 1968 年 7 月之间关于 UFO/flying discs 的调查记录、目击证词、公众报告、照片材料与媒体报道等；这类材料应被解读为历史档案释放，而不是当代传感器确认。索引还包含 Department of War / USCENTCOM 等现代任务材料，后续应与对应 PDF 或 pdftotext 文本交叉阅读，避免只凭 blurb 做结论。</p><p class="tr-zh" lang="zh-CN">从索引可见，FBI 条目集中在 62-HQ-83894 历史案卷分段，描述为 1947 年 6 月至 1968 年 7 月之间关于 UFO/flying discs 的调查记录、目击证词、公众报告、照片材料与媒体报道等；这类材料应被解读为历史档案释放，而不是当代传感器确认。索引还包含 Department of War / USCENTCOM 等现代任务材料，后续应与对应 PDF 或 pdftotext 文本交叉阅读，避免只凭 blurb 做结论。</p>
+
+<p>引用来源：<a href="file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv">官方 CSV 本地缓存</a>。</p><p class="tr-zh" lang="zh-CN">引用来源：官方 CSV 本地缓存。</p>
+
+</section><section class="wiki-page" id="wiki-syria-2024-mission-report"><h3>Syria 2024 Mission Report <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>Syria 2024 Mission Report</h1>
+<p>这页记录的是 PURSUE Release 01 中的一个近期军事任务案例。文本来自 <a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt">dow-uap-d32-syria-2024.txt</a>，显示任务叙述中有常规 ISR/FMV/SIGINT 流程，也有一次 UAP 观察条目。</p><p class="tr-zh" lang="zh-CN">这页记录的是 PURSUE Release 01 中的一个近期军事任务案例。文本来自 dow-uap-d32-syria-2024.txt，显示任务叙述中有常规 ISR/FMV/SIGINT 流程，也有一次 UAP 观察条目。</p>
+
+<h2>Key Finding</h2>
+<p>该文件最能说明的是：UAP 在这批 release 中经常以“任务记录中的未识别观察”形式出现，而不是以完成判定的科学结论出现。文本提到 1559Z 观察到 unidentified aerial phenomenon，同时记录 20:24 mission hours、14:22 FMV hours、3X FMV taskings、13:02 SIGINT hours、3X SIGINT taskings，但大量作战细节被删节。</p><p class="tr-zh" lang="zh-CN">该文件最能说明的是：UAP 在这批 release 中经常以“任务记录中的未识别观察”形式出现，而不是以完成判定的科学结论出现。文本提到 1559Z 观察到 unidentified aerial phenomenon，同时记录 20:24 mission hours、14:22 FMV hours、3X FMV taskings、13:02 SIGINT hours、3X SIGINT taskings，但大量作战细节被删节。</p>
+
+<h2>Evidence Boundary</h2>
+<p>这份材料应被归入“官方任务文本中的事件记录”。它支持存在 UAP 记录，不支持把 UAP 的来源、性能或性质定性为外星、非人技术或已验证异常飞行能力。后续正文可把它与 <a class="wiki-link" href="#wiki-pursue-release-01">pursue-release-01</a> 和 <a class="wiki-link" href="#wiki-source-local-uap-csv">source-local-uap-csv</a> 交叉引用，用来解释 release 的证据层级。</p><p class="tr-zh" lang="zh-CN">这份材料应被归入“官方任务文本中的事件记录”。它支持存在 UAP 记录，不支持把 UAP 的来源、性能或性质定性为外星、非人技术或已验证异常飞行能力。后续正文可把它与 pursue-release-01 和 source-local-uap-csv 交叉引用，用来解释 release 的证据层级。</p>
+
+</section><section class="wiki-page" id="wiki-western-us-event-2023"><h3>Western U.S. Event 2023 <a class="wiki-page-back" href="#wiki-toc-anchor" aria-label="back to wiki index">↑ index</a></h3><h1>Western U.S. Event 2023</h1>
+<p>这个条目对应 Release 01 中的一个代表性目击材料，原文标题和叙述集中在 Western U.S. 的多组联邦执法人员目击报告上，来源为本地抽取文本 <a href="file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt">western-us-event-2023.txt</a>。</p><p class="tr-zh" lang="zh-CN">这个条目对应 Release 01 中的一个代表性目击材料，原文标题和叙述集中在 Western U.S. 的多组联邦执法人员目击报告上，来源为本地抽取文本 western-us-event-2023.txt。</p>
+
+<h2>核心内容</h2>
+<p>材料记录了两类主要叙述：一类被概括为 “Orbs Launching Orbs”，称三组、每组两名联邦执法 special agents 在两天黄昏时段，从不同位置观察到橙色球体短暂出现并释放较小红色球体；另一类为 “Large, Fiery Orb”，称两名联邦执法 special agents 在约 500-600 米距离观察到一个发光橙色球体，位置接近岩石尖峰，大小估计接近“小型直升机驾驶舱”。</p><p class="tr-zh" lang="zh-CN">材料记录了两类主要叙述：一类被概括为 “Orbs Launching Orbs”，称三组、每组两名联邦执法 special agents 在两天黄昏时段，从不同位置观察到橙色球体短暂出现并释放较小红色球体；另一类为 “Large, Fiery Orb”，称两名联邦执法 special agents 在约 500-600 米距离观察到一个发光橙色球体，位置接近岩石尖峰，大小估计接近“小型直升机驾驶舱”。</p>
+
+<h2>证据质量判断</h2>
+<p>这个案例的价值不在于证明“异常技术”，而在于展示 Release 01 中较强叙事性的目击材料如何被官方释放：它有多个独立观察者、地点/时段和外观描述，但仍主要是证人叙述、估计距离、艺术渲染和文字摘要。它缺少可公开复核的同步传感器数据、完整影像链路、雷达/红外原始数据或排除常规解释的技术分析，因此更适合放入“值得重点关注但不能下结论”的层级。</p><p class="tr-zh" lang="zh-CN">这个案例的价值不在于证明“异常技术”，而在于展示 Release 01 中较强叙事性的目击材料如何被官方释放：它有多个独立观察者、地点/时段和外观描述，但仍主要是证人叙述、估计距离、艺术渲染和文字摘要。它缺少可公开复核的同步传感器数据、完整影像链路、雷达/红外原始数据或排除常规解释的技术分析，因此更适合放入“值得重点关注但不能下结论”的层级。</p>
+
+<h2>报告用法</h2>
+<p>在总报告中，<a class="wiki-link" href="#wiki-western-us-event-2023">western-us-event-2023</a> 可以作为“多证人叙述强、物证链弱”的样本，与 <a class="wiki-link" href="#wiki-syria-2024-mission-report">syria-2024-mission-report</a> 这类行动报告、<a class="wiki-link" href="#wiki-indopacom-2025-tearlines">indopacom-2025-tearlines</a> 这类 tearlines 邮件材料形成对照。它支持的结论是：Release 01 包含一些看似离奇、叙事完整的 unresolved 记录；它不支持的结论是：这些记录已经验证了非人类飞行器、外星生命或无法由常规空中/光学/人为因素解释的现象。</p><p class="tr-zh" lang="zh-CN">在总报告中，western-us-event-2023 可以作为“多证人叙述强、物证链弱”的样本，与 syria-2024-mission-report 这类行动报告、indopacom-2025-tearlines 这类 tearlines 邮件材料形成对照。它支持的结论是：Release 01 包含一些看似离奇、叙事完整的 unresolved 记录；它不支持的结论是：这些记录已经验证了非人类飞行器、外星生命或无法由常规空中/光学/人为因素解释的现象。</p>
+
+</section></section>
+
+    <div class="sources">
+      <h2><span class="section-num">SOURCES</span><span>All linked</span></h2>
+      <ul>
+  <li><span class="kind">browser-fallback</span><a href="https://www.war.gov/UFO/">https://www.war.gov/UFO/</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv">file:///private/tmp/ascent-ufo-cache/uap-csv.browser.csv</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt">file:///private/tmp/ascent-ufo-cache/text/dow-uap-pr20-kuwait-2022.txt</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt">file:///private/tmp/ascent-ufo-cache/text/dow-uap-d32-syria-2024.txt</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt">file:///private/tmp/ascent-ufo-cache/text/dow-uap-d50-indopacom-2025.txt</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt">file:///private/tmp/ascent-ufo-cache/text/western-us-event-2023.txt</a></li>
+  <li><span class="kind">local-file</span><a href="file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt">file:///private/tmp/ascent-ufo-cache/text/dos-papua-new-guinea-1985.txt</a></li>
+  <li><span class="kind">browser-fallback</span><a href="https://www.aaro.mil/">https://www.aaro.mil/</a></li>
+</ul>
+
+    </div>
+
+    <p class="footer">
+      Session · /Users/zhangalex/.actionbook/ascent-research/war-gov-ufo-zh-clean · 8 accepted sources · 224992 bytes · generated 2026-05-09T10:26:04.063908+00:00
+    </p>
+  </div>
+</body>
+</html>

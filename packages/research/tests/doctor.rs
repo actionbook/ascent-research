@@ -245,6 +245,18 @@ exit 0
     assert_eq!(by_name["postagent_public_dry_run"]["ok"], false);
     assert_eq!(by_name["postagent_public_dry_run"]["required"], false);
     assert_eq!(by_name["actionbook_browser_list_sessions"]["ok"], true);
+    for name in [
+        "actionbook_browser_doctor",
+        "actionbook_browser_doctor_startable",
+        "actionbook_cdp_connectable",
+        "actionbook_page_fetchable",
+        "actionbook_readable_extractable",
+    ] {
+        assert!(
+            by_name.contains_key(name),
+            "missing layered actionbook check {name}"
+        );
+    }
 }
 
 #[test]

@@ -28,11 +28,18 @@ impl Env {
     }
 
     fn research(&self, args: &[&str]) -> (Value, i32, String) {
+        self.research_with_env(args, &[])
+    }
+
+    fn research_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> (Value, i32, String) {
         let mut cmd = Command::new(research_bin());
         cmd.args(args);
         cmd.env("ACTIONBOOK_RESEARCH_HOME", &self.home);
         // Default: skip `--open` side effects even if tests forget.
         cmd.env("SYNTHESIZE_NO_OPEN", "1");
+        for (key, value) in envs {
+            cmd.env(key, value);
+        }
         let out = cmd.output().expect("spawn research");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -169,12 +176,57 @@ fn synthesize_happy_path_writes_json_and_html() {
     assert_eq!(v["data"]["bilingual"]["requested"], false);
     assert_eq!(v["data"]["bilingual"]["status"], "not_requested");
     assert_eq!(v["data"]["bilingual"]["zh_paragraphs"], 0);
+    assert_eq!(v["data"]["pdf"]["requested"], false);
+    assert_eq!(v["data"]["pdf"]["status"], "not_requested");
+    assert!(v["data"]["pdf"]["report_pdf_path"].is_null());
     assert!(env.session_dir("s1").join("report.json").exists());
     assert!(env.session_dir("s1").join("report.html").exists());
+    assert!(!env.session_dir("s1").join("report.pdf").exists());
 
     let jsonl = fs::read_to_string(env.session_dir("s1").join("session.jsonl")).unwrap();
     assert!(jsonl.contains("synthesize_started"));
     assert!(jsonl.contains("synthesize_completed"));
+}
+
+#[test]
+fn synthesize_pdf_is_explicit_and_uses_local_chrome_by_default() {
+    let env = Env::new();
+    prep_report_ready_session(&env, "s1pdf-local");
+    let fake_chrome = env.session_dir("s1pdf-local").join("fake-chrome.sh");
+    fs::write(
+        &fake_chrome,
+        r#"#!/bin/sh
+out=""
+for arg in "$@"; do
+  case "$arg" in
+    --print-to-pdf=*) out="${arg#--print-to-pdf=}" ;;
+  esac
+done
+test -n "$out" || exit 3
+printf '%s\n' '%PDF-1.4 fake local' > "$out"
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_chrome, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let fake_chrome_s = fake_chrome.to_string_lossy().into_owned();
+    let (v, code, stderr) = env.research_with_env(
+        &["synthesize", "s1pdf-local", "--pdf", "--json"],
+        &[("ASR_PDF_CHROME_BIN", &fake_chrome_s)],
+    );
+    assert_eq!(code, 0, "stderr: {stderr}; v={v}");
+    assert_eq!(v["data"]["pdf"]["requested"], true);
+    assert_eq!(v["data"]["pdf"]["provider"], "local");
+    assert_eq!(v["data"]["pdf"]["status"], "complete");
+    assert_eq!(
+        v["data"]["pdf"]["report_pdf_path"],
+        "s1pdf-local/report.pdf"
+    );
+    assert!(env.session_dir("s1pdf-local").join("report.pdf").exists());
 }
 
 #[test]

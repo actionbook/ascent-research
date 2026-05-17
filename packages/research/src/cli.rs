@@ -123,6 +123,17 @@ pub enum Commands {
         /// when this would be exceeded. Default 2 MiB.
         #[arg(long = "max-total-bytes")]
         max_total_bytes: Option<u64>,
+        /// Original online URL represented by the local cache/source note.
+        /// Used for fallback provenance in session.jsonl.
+        #[arg(long = "original-url")]
+        original_url: Option<String>,
+        /// Tool that produced the local fallback artifact, e.g. curl,
+        /// browser-cache, web, manual.
+        #[arg(long = "origin-tool")]
+        origin_tool: Option<String>,
+        /// Human-readable reason for the fallback ingest.
+        #[arg(long = "origin-note")]
+        origin_note: Option<String>,
     },
     /// List sources attached to the current or given session.
     Sources {
@@ -165,6 +176,13 @@ pub enum Commands {
         /// to report length.
         #[arg(long)]
         bilingual: bool,
+        /// Also convert the rendered report.html to report.pdf using
+        /// isolated local Chromium.
+        #[arg(long)]
+        pdf: bool,
+        /// Explicit PDF output path. Implies --pdf.
+        #[arg(long = "pdf-output")]
+        pdf_output: Option<String>,
     },
     /// Run the completion protocol: coverage -> synthesize -> audit.
     Finish {
@@ -426,12 +444,18 @@ fn dispatch(cmd: Commands) -> Envelope {
             glob,
             max_file_bytes,
             max_total_bytes,
+            original_url,
+            origin_tool,
+            origin_note,
         } => commands::add_local::run(
             &path,
             slug.as_deref(),
             &glob,
             max_file_bytes,
             max_total_bytes,
+            original_url.as_deref(),
+            origin_tool.as_deref(),
+            origin_note.as_deref(),
         ),
         Commands::Sources { slug, rejected } => commands::sources::run(slug.as_deref(), rejected),
         Commands::Batch {
@@ -458,7 +482,16 @@ fn dispatch(cmd: Commands) -> Envelope {
             no_render,
             open,
             bilingual,
-        } => commands::synthesize::run(slug.as_deref(), no_render, open, bilingual),
+            pdf,
+            pdf_output,
+        } => commands::synthesize::run(
+            slug.as_deref(),
+            no_render,
+            open,
+            bilingual,
+            pdf || pdf_output.is_some(),
+            pdf_output.as_deref(),
+        ),
         Commands::Finish {
             slug,
             open,

@@ -226,6 +226,74 @@ fn add_postagent_happy_path_envelope() {
 }
 
 #[test]
+fn add_local_records_fallback_provenance() {
+    let env = Env::new();
+    env.research(&["new", "fallback", "--slug", "fallback", "--json"]);
+    let source_dir = env.session_dir("fallback").join("cache");
+    fs::create_dir_all(&source_dir).unwrap();
+    let source_file = source_dir.join("source.md");
+    fs::write(
+        &source_file,
+        "# Cached source\n\nThis is a locally cached fallback artifact with enough text to pass the local ingest pipeline. It preserves the original URL for audit.",
+    )
+    .unwrap();
+
+    let (v, code, stderr) = env.research(&[
+        "add-local",
+        source_dir.to_str().unwrap(),
+        "--slug",
+        "fallback",
+        "--original-url",
+        "https://example.com/original",
+        "--origin-tool",
+        "curl",
+        "--origin-note",
+        "actionbook daemon unavailable",
+        "--json",
+    ]);
+    assert_eq!(code, 0, "stderr: {stderr}; envelope: {v}");
+    assert_eq!(v["data"]["accepted_count"], 1);
+    assert_eq!(
+        v["data"]["fallback"]["original_url"],
+        "https://example.com/original"
+    );
+    assert_eq!(v["data"]["fallback"]["origin_tool"], "curl");
+
+    let events = env.jsonl_events("fallback");
+    assert!(
+        events.iter().any(|ev| ev["event"] == "fallback_selected"),
+        "missing fallback_selected in {events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| ev["event"] == "original_url_preserved"
+                && ev["original_url"] == "https://example.com/original"
+                && ev["origin_tool"] == "curl"),
+        "missing original_url_preserved in {events:#?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| ev["event"] == "fallback_source_accepted"
+                && ev["original_url"] == "https://example.com/original"
+                && ev["bytes"].as_u64().unwrap_or(0) > 0),
+        "missing fallback_source_accepted in {events:#?}"
+    );
+
+    let (audit, audit_code, audit_stderr) = env.research(&["--json", "audit", "fallback"]);
+    assert_eq!(audit_code, 0, "stderr: {audit_stderr}; envelope: {audit}");
+    let fallback_events = audit["data"]["fallback"]["events"].as_array().unwrap();
+    assert!(
+        fallback_events
+            .iter()
+            .any(|ev| ev["kind"] == "original_url_preserved"
+                && ev["original_url"] == "https://example.com/original"),
+        "audit did not surface fallback provenance: {audit}"
+    );
+}
+
+#[test]
 fn add_postagent_happy_emits_tool_call_events() {
     let env = Env::new();
     env.research(&["new", "t1", "--slug", "t1", "--json"]);
