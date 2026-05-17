@@ -85,6 +85,33 @@ Claude Code / Codex instance, or vice versa.
 
 ---
 
+## What's new in 0.4.1
+
+- **x.com / twitter.com tweet capture works end-to-end** through the V2
+  browser backend. v0.4.0's generic runcode JS returned ~160 bytes of
+  X's left-nav chrome only; 0.4.1 adds an `XTweet` runcode flavor that
+  waits for `article[data-testid="tweet"]` (not `networkidle`), scrolls
+  with **snapshot-collect across virtualized DOM** so the main tweet
+  isn't unmounted out of the result, and reads up to 25 thread articles
+  with image / video poster URLs inlined as markdown `![](url)`.
+- **3 new tech preset rules**: `x-tweet-status`, `x-profile`,
+  `x-search-live` — explicit kinds for `route` debugging.
+- **Bugfix in `md_parser::extract_http_links`**: markdown image syntax
+  `![alt](url)` is now correctly excluded from the cited-sources scan,
+  so embedding pictures of cited tweets no longer trips
+  `sources_hallucinated`.
+
+Live impact (same URLs, before vs after):
+
+| URL | 0.4.0 | 0.4.1 |
+|---|---|---|
+| `x.com/<user>/status/<id>` (any) | 162 B chrome | **2-3 KB** main tweet + thread + media |
+
+See `CHANGELOG.md` for full notes and `specs/x-com-tweet-runcode-flavor.spec.md`
+for the design (33 BDD scenarios, lint 100%).
+
+---
+
 ## What's new in 0.4.0
 
 - **V2 Actionbook MCP backend is now the default** for browser-rendered

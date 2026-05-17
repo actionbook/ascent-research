@@ -1,5 +1,93 @@
 # Changelog
 
+## 0.4.1 — x.com tweet/thread/media capture
+
+Patch release: complete x.com (and twitter.com mirror) tweet capture
+through the V2 actionbook MCP backend. Default runcode JS on x.com
+previously returned ~160 bytes of left-nav chrome only — the tweet
+`<article>` is hydrated by a separate GraphQL `TweetDetail` request
+fired AFTER `networkidle`, and a virtualized list unmounts the main
+tweet once the page scrolls. v0.4.1 adds a per-host `XTweet` runcode
+flavor that fixes all three.
+
+Built spec-first (`specs/x-com-tweet-runcode-flavor.spec.md`, lint
+100%, 33 BDD scenarios). Three iterations of live discovery on
+@yoh2_sdj, @FUCORY, @mycoliza threads informed the design.
+
+### Added
+
+- **`RuncodeFlavor::XTweet`** runcode variant + `flavor_for_url`
+  host sniff (`x.com`, `www.x.com`, `mobile.x.com`, `twitter.com`,
+  `www.twitter.com`, `mobile.twitter.com` → XTweet; all others →
+  Default). New `build_runcode_cmd_for_url(url, …)` is the URL-aware
+  variant; `build_runcode_cmd` retained as the explicit Default
+  entrypoint so v0.4.0's `runcode_flags.rs` tests pass unchanged.
+- **`runcode_inline_js_x_tweet`** inline JS implementing:
+  - `waitForSelector('article[data-testid="tweet"], [data-testid="cellInnerDiv"], [data-testid="UserName"]', { timeout: 15000 })`
+    instead of `networkidle` (X never reaches idle).
+  - **snapshot-collect strategy across `MAX_SCROLLS = 8`** — DOM is
+    snapshotted BEFORE the first scroll (so the main tweet,
+    unmounted by X's react-virtual after scroll-to-bottom, is
+    captured) and after each step. `Map<tweetId, text>` keyed by
+    tweetId from `/USER/status/<id>` links dedupes across snapshots
+    so virtualized articles survive in the result.
+  - **Incremental `scrollBy(0, innerHeight * 0.8)`** replaces
+    `scrollTo(0, scrollHeight)` jump-to-bottom — more articles stay
+    mounted between reads.
+  - **Per-article media extraction** — `<img>.src` filtered to the
+    `pbs.twimg.com/{media,tweet_video_thumb,card_img}` whitelist
+    (avatars `profile_images/*` and twemoji `abs-0.twimg.com/emoji/*`
+    excluded as noise) + `<video>.poster` first-frame URLs, emitted
+    as markdown `![](url)` so rich-html renders them as `<img>` and
+    Obsidian / VS Code preview picks them up.
+  - `MAX_ARTICLES = 25` cap + early-stop on zero-progress snapshot.
+- **Three new explicit tech preset rules** in `presets/tech.toml`:
+  `x-tweet-status`, `x-profile`, `x-search-live` — each routes
+  through the V2 browser executor so the XTweet flavor is selected,
+  and gives the `route` command a stable kind label for debugging /
+  audit.
+- New test file `tests/x_tweet_flavor.rs` — 33 BDD scenarios:
+  9 URL → flavor dispatch (incl. legacy mirror + mobile + www +
+  malformed fallback), 15 inline JS shape (multi-selector / scroll
+  primitives / Map dedup / cap / image whitelist / markdown
+  syntax / no-avatar-no-emoji), 2 URL-aware cmd builder, 4 preset
+  rule presence, 1 github-issue route regression, 1 Default JS
+  networkidle regression, 1 snapshot-before-first-scroll ordering.
+
+### Fixed
+
+- **`md_parser::extract_http_links` now skips markdown image syntax
+  `![alt](url)`** — image URLs name embedded media assets (tweet
+  attachments), not cited research sources. Counting them under
+  `sources_hallucinated` blocks reports that legitimately embed
+  pictures of cited tweets. Walk-back from `]` matches the opening
+  `[`; preceded by `!` ⇒ skipped. Newline guard stops cross-paragraph
+  scans. New unit test `extract_http_links_skips_markdown_image_syntax`
+  pins the regression.
+
+### Live impact
+
+| URL | bytes (0.4.0) | bytes (0.4.1) |
+|---|---|---|
+| `https://x.com/yoh2_sdj/status/2055889…` | 162 (chrome) | 764 (tweet + auto-translation + metrics) |
+| `https://x.com/FUCORY/status/2055675…` | 162 (chrome) | 3 064 (main + 10 thread tweets + 10 media URLs) |
+| `https://x.com/mycoliza/status/2055825…` | 162 (chrome) | 2 036 (main + 8 replies + 1 GitHub PR card) |
+
+### Tests
+
+621 passing / 0 failed (was 584 at 0.4.0; +33 x.com flavor + 4 from
+new main commits since 0.4.0 branched). Network-free as before — the
+XTweet flavor's behaviour is verified through inline JS substring
+asserts; live behaviour is verified manually on edge.actionbook.dev.
+
+### Breaking
+
+None. x.com URLs that previously routed through the generic
+browser-fallback rule still route through browser; only the inline JS
+shape differs (richer output, same call surface). The
+`build_runcode_cmd` (Default flavor only) entrypoint signature is
+unchanged.
+
 ## 0.4.0 — V2 Actionbook MCP backend
 
 Minor release: ascent-research now defaults to the V2 Actionbook MCP

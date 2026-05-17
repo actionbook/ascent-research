@@ -197,6 +197,25 @@ Research target
   if `postagent auth github` is not configured, you'll get
   `fetch_failed` even though V2 looks healthy. Step 4 above prevents
   this.
+- **x.com / twitter.com URLs use a dedicated `XTweet` runcode flavor**
+  since v0.4.1. The generic `networkidle` + body-text poll returned only
+  X's left-nav chrome (~160 bytes) because X's tweet `<article>` is
+  GraphQL-hydrated AFTER networkidle, and the page virtualizes (unmounts
+  scrolled-off articles). XTweet uses `waitForSelector('article[data-testid="tweet"]',
+  …)` instead, plus snapshot-collect across scrolls keyed by tweetId so
+  the main tweet survives virtualization. Thread + media (tweet attach
+  + link card + video poster) are returned as markdown `![](url)` so
+  rich-html renders them as `<img>` and Obsidian / VS Code preview shows
+  them. Three explicit preset rules — `x-tweet-status` (3-seg path),
+  `x-search-live` (`/search`), `x-profile` (1-seg) — route through this
+  flavor; everything else x.com routes via fallback (also XTweet by host
+  sniff).
+- **Default `--min-bytes` is 500 — short single tweets need `--min-bytes 200`**.
+  A typical single tweet returns ~400-500 bytes (text + author + metrics);
+  multi-article threads naturally exceed 500. If a known-good single X
+  URL gets `SMELL_REJECTED reject_reason=empty_content`, pass
+  `--min-bytes 200`. Future spec may auto-adjust per `x-tweet-status`
+  kind.
 
 ## Mandatory Tail (MANDATORY — `finish` is preferred)
 
